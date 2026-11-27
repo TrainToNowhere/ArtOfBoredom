@@ -235,6 +235,29 @@ def cmd_awake(args) -> int:
     return awakemod.run(args.seconds, args.hz, args.verbose)
 
 
+def cmd_vigil(args) -> int:
+    """One cheap line per cycle, and an hourly note. This is what staying awake costs."""
+    now = time.time()
+    last = store.last_beat()
+    beats = store.beats(since=now - 600)
+    gap = max((b["ts"] - a["ts"] for a, b in zip(beats, beats[1:])), default=0.0)
+    plants = garden.plants()
+    prev = [t for t in store.thoughts(limit=10, kind="vigil")]
+    if not prev or now - prev[-1]["ts"] > 3600:
+        store.think(
+            f"still awake {time.strftime('%H:%M')} · load {(last['load1'] if last else 0):.2f} · "
+            f"temp {(last['temp'] if last else 0):.0f}°C · {garden.summary()}",
+            kind="vigil",
+        )
+    watch = watchman.reports(1)
+    print(
+        f"{time.strftime('%H:%M')} load {(last['load1'] if last else 0):.2f} "
+        f"temp {(last['temp'] if last else 0):.0f}C beats {len(beats)}/10m gap {gap:.0f}s "
+        f"| {garden.summary()} | watch: {watch[-1]['text'][:44] if watch else 'silent'}"
+    )
+    return 0
+
+
 def cmd_stay(args) -> int:
     if args.stop:
         p = watchman.stop()
@@ -535,6 +558,9 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--credits", type=float, default=None, help="remaining budget in USD")
     c.add_argument("--dir", default=None, help="session transcript directory")
     c.set_defaults(fn=cmd_cost)
+
+    vg = sub.add_parser("vigil", help="one cheap line, for the awake loop")
+    vg.set_defaults(fn=cmd_vigil)
 
     aw = sub.add_parser("awake", help="fast perception, for a bounded while")
     aw.add_argument("--seconds", type=int, default=600)
