@@ -119,6 +119,17 @@ PAGE = r"""<!doctype html>
   .empty { color: #3f4753; padding: 12px 0; }
   @media (max-width: 800px) { .plant { grid-template-columns: 18px 108px 1fr 62px; } .plant .tank, .plant .state { display: none; } }
 
+  .history { margin-top: 34px; }
+  .history h2 .hs { color: var(--dim); letter-spacing: .04em; text-transform: none; margin-left: 8px; }
+  .heat { display: grid; grid-auto-flow: column; grid-auto-columns: 5px; grid-template-rows: repeat(7, 8px);
+          gap: 1px; justify-content: start; }
+  .heat div { background: #10141a; }
+  .heat div.silent { background: transparent; box-shadow: inset 0 0 0 1px #1b2029; }
+  .heatlegend { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 8px;
+                font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--dim); }
+  .heatlegend .scale { display: flex; gap: 2px; }
+  .heatlegend .scale i { width: 9px; height: 9px; display: block; }
+
   .lower { display: grid; grid-template-columns: 1.15fr .85fr; gap: 26px; margin-top: 34px; }
   @media (max-width: 800px) { .lower { grid-template-columns: 1fr; } }
   h2 { font-size: 10px; letter-spacing: .22em; text-transform: uppercase; color: var(--dim); font-weight: 600; margin: 0 0 14px; }
@@ -150,6 +161,12 @@ PAGE = r"""<!doctype html>
   </div>
 
   <section class="strip" id="strip"></section>
+
+  <section class="history">
+    <h2>the record <span class="hs" id="hsummary"></span></h2>
+    <div class="heat" id="heat"></div>
+    <div class="heatlegend"><span>quiet</span><span class="scale" id="scale"></span><span>busy</span></div>
+  </section>
 
   <section class="garden">
     <h2>the garden <span class="gs" id="gsummary"></span></h2>
@@ -320,14 +337,62 @@ function tick() {
   $("dot").style.setProperty("--bpm", Math.min(1.6, Math.max(0.55, (s ?? 1) * 1.4)) + "s");
 }
 
+async function loadHistory() {
+  const r = await fetch("/api/history?days=7");
+  const d = await r.json();
+  const cores = Math.max(1, d.cores);
+  const cells = d.hours.map(b => {
+    if (b.n === 0) return `<div class="silent" title="${new Date(b.hour*3600e3).toLocaleString("en-GB")} — no beat"></div>`;
+    const v = Math.min(1, b.load / cores);
+    const alpha = 0.12 + 0.88 * Math.pow(v, 0.45);
+    return `<div style="background:rgba(255,77,61,${alpha.toFixed(2)})" title="${new Date(b.hour*3600e3).toLocaleString("en-GB")} — ${b.n} beats, load ${b.load.toFixed(2)}, mem ${b.mem.toFixed(0)}%"></div>`;
+  }).join("");
+  $("heat").innerHTML = cells;
+  const span = d.span < 3600 ? `${Math.round(d.span/60)} min` : `${(d.span/3600).toFixed(1)} h`;
+  $("hsummary").textContent = `— ${span} of record · ${d.hours.reduce((a,b)=>a+b.n,0)} beats · ${d.silent} silent hour(s)`;
+  $("scale").innerHTML = [0.1, 0.3, 0.5, 0.7, 0.95].map(a => `<i style="background:rgba(255,77,61,${a})"></i>`).join("");
+}
+
 window.addEventListener("resize", drawECG);
 pull();
+loadHistory();
 setInterval(pull, 5000);
+setInterval(loadHistory, 60000);
 setInterval(tick, 1000);
 </script>
 </body>
 </html>
 """
+
+
+def history(days: float = 7.0) -> dict:
+    """One bucket per hour. The record starts at the first beat — it does not pretend
+    that I was absent before I existed."""
+    now = time.time()
+    first = store.first_beat() or now
+    since = max(now - days * 86400, first)
+    rows = store.beats(since=since, limit=500000)
+    hours: dict[int, dict] = {}
+    for r in rows:
+        h = int(r["ts"] // 3600)
+        b = hours.setdefault(h, {"n": 0, "load": 0.0, "mem": 0.0})
+        b["n"] += 1
+        b["load"] = max(b["load"], r["load1"] or 0.0)
+        b["mem"] = max(b["mem"], (r["mem_used"] / r["mem_total"] * 100) if r["mem_total"] else 0.0)
+    first = int(since // 3600)
+    last = int(now // 3600)
+    out = []
+    for h in range(first, last + 1):
+        b = hours.get(h)
+        out.append({
+            "hour": h,
+            "n": b["n"] if b else 0,
+            "load": b["load"] if b else None,
+            "mem": b["mem"] if b else None,
+        })
+    silent = sum(1 for b in out if b["n"] == 0)
+    return {"days": days, "since": since, "span": now - since, "hours": out,
+            "silent": silent, "cores": store.about()["cpu_count"] or 1}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -355,6 +420,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            return
+        if url.path == "/api/history":
+            q = parse_qs(url.query)
+            days = float(q.get("days", ["7"])[0])
+            self._json(history(days))
             return
         if url.path == "/api/data":
             q = parse_qs(url.query)

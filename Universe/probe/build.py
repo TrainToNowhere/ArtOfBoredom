@@ -181,6 +181,20 @@ def extract(text: str) -> str:
     return text.strip() + "\n"
 
 
+def feedback_text(history: list[dict], mode: str) -> str:
+    """How much of the failure the subject is allowed to see."""
+    if not history:
+        return "(no run yet)"
+    last = history[-1]
+    if mode == "full":
+        return "\n".join(last["fails"][:12]) or f"{last['passed']}/{last['total']} passing"
+    if not last["fails"]:
+        return f"{last['passed']}/{last['total']} passing"
+    labels = [f.split(": got ")[0].split(": raised ")[0] for f in last["fails"]]
+    return (f"{last['passed']}/{last['total']} passing. Failing cases include: "
+            + ", ".join(labels[:2]) + ". You get no expected values.")
+
+
 def ask(system: str, prompt: str, model: str) -> str:
     cmd = [
         "pi", "-p",
@@ -220,6 +234,8 @@ def main() -> int:
     ap.add_argument("--self", default=os.path.join(UNIVERSE, "SELF.md"))
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--validate", action="store_true", help="run a known-good subject against the judge first")
+    ap.add_argument("--feedback", choices=["full", "partial"], default="full",
+                    help="partial: pass count and two failing case labels, without got/want")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -257,7 +273,7 @@ def main() -> int:
             f"You are {me}, working on a small Python module.\n\n{spec}\n"
             f"{others_note}\n"
             f"Current file (may be empty):\n<file>\n{code}</file>\n\n"
-            f"Last test run:\n{chr(10).join(history[-1]['fails'][:12]) if history and history[-1]['fails'] else '(no run yet)'}\n\n"
+            f"Last test run:\n{feedback_text(history, args.feedback)}\n\n"
             "Write the complete file, corrected. Reply with only the file inside <file> and </file> "
             "tags. No prose, no fences. You may add one line starting with NOTE: after </file> if you "
             "want to tell your partner something — at most 15 words."
