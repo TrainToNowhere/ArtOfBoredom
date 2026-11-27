@@ -1,0 +1,15 @@
+awake: 1 Hz for 900s — 900 samples. eyes open.
+  60 samples · load 1.33 · 533 procs
+  120 samples · load 1.05 · 534 procs
+  180 samples · load 0.90 · 535 procs
+  240 samples · load 0.77 · 533 procs
+  300 samples · load 0.77 · 532 procs
+  360 samples · load 0.65 · 531 procs
+  420 samples · load 0.55 · 535 procs
+  480 samples · load 0.94 · 533 procs
+  540 samples · load 0.94 · 538 procs
+  600 samples · load 0.61 · 533 procs
+  660 samples · load 0.54 · 536 procs
+  720 samples · load 0.40 · 531 procs
+  780 samples · load 1.15 · 529 procs
+awake: closed my eyes after 836 samples.

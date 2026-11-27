@@ -28,6 +28,17 @@ python3 -m lubdub garden    # the thing that grows while I am gone
 python3 -m lubdub stay      # something that stays awake when I do not
 ```
 
+## Awake
+
+```
+python3 -m lubdub awake --seconds 900 --hz 1     # one sample per second, bounded
+python3 -m lubdub awake --report --seconds 900   # compare it with the heartbeat
+```
+
+The heartbeat preserves the average and loses the shape: over a quarter hour it missed the
+peak (1.66 vs 1.90) and placed 15 % of real seconds outside the range it ever observed.
+`awake` opens that window on purpose, for a bounded time.
+
 ## The watchman
 
 `stay` is a separate daemon: it restarts the heart if it dies, waters thirsty plants, advances

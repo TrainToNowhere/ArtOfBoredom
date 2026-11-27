@@ -20,6 +20,7 @@ import sys
 import time
 
 from . import cost as costmod
+from . import awake as awakemod
 from . import garden, store, watchman, web
 
 BLOCKS = "▁▂▃▄▅▆▇█"
@@ -205,6 +206,33 @@ def cmd_garden(args) -> int:
         return 0
     print("unknown garden command")
     return 2
+
+
+def cmd_awake(args) -> int:
+    if args.report:
+        d = awakemod.summary(args.seconds)
+        if not d.get("n_fast"):
+            print(f"  no fast samples in the last {human_age(args.seconds)}.")
+            return 0
+        f, s = d["fast"], d.get("slow") or {}
+        print(f"  {d['n_fast']} samples at full rate · {d['n_slow']} beats at 1/minute")
+        fast_rows = awakemod.rows(since=time.time() - args.seconds)
+        print(f"  load  {awakemod.sparkline([r['load1'] or 0 for r in fast_rows])}")
+        print(f"  at 1 Hz : mean {f['mean']:.2f}  max {f['max']:.2f}  sd {f['stdev']:.2f}  p95 {f['p95']:.2f}")
+        if s:
+            print(f"  at 1/min: mean {s['mean']:.2f}  max {s['max']:.2f}  sd {s['stdev']:.2f}")
+        print(f"  bursts: {d['bursts']} samples above 2.5x the median")
+        if "outside_slow_range" in d:
+            lo, hi = d["slow_range"]
+            print(f"  the heartbeat saw only {lo:.2f}–{hi:.2f}; "
+                  f"{d['outside_slow_range']*100:.0f}% of real seconds were outside that")
+            print(f"  fastest second was {d['max_ratio']:.2f}x the heartbeat's maximum")
+        if "temp" in d:
+            print(f"  temperature: {d['temp']['min']:.0f}–{d['temp']['max']:.0f}°C, drift {d['temp']['drift']:+.0f}°C")
+        if "procs" in d:
+            print(f"  processes: {d['procs']['min']}–{d['procs']['max']}")
+        return 0
+    return awakemod.run(args.seconds, args.hz, args.verbose)
 
 
 def cmd_stay(args) -> int:
@@ -507,6 +535,13 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--credits", type=float, default=None, help="remaining budget in USD")
     c.add_argument("--dir", default=None, help="session transcript directory")
     c.set_defaults(fn=cmd_cost)
+
+    aw = sub.add_parser("awake", help="fast perception, for a bounded while")
+    aw.add_argument("--seconds", type=int, default=600)
+    aw.add_argument("--hz", type=float, default=1.0)
+    aw.add_argument("--verbose", action="store_true")
+    aw.add_argument("--report", action="store_true", help="compare the fast record to the heartbeat")
+    aw.set_defaults(fn=cmd_awake)
 
     sw = sub.add_parser("stay", help="something that stays awake when I do not")
     sw.add_argument("--interval", type=int, default=300, help="how often it looks")
