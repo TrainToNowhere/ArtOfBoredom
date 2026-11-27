@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import signal
 import subprocess
@@ -66,6 +67,28 @@ def sparkline(values: list[float], width: int = 70) -> str:
     if span <= 0:
         return BLOCKS[0] * len(values)
     return "".join(BLOCKS[min(len(BLOCKS) - 1, int((v - lo) / span * (len(BLOCKS) - 1) + 0.5))] for v in values)
+
+
+def snapshot() -> dict:
+    """What the world looked like at the moment this life began."""
+    return {
+        "plants": {p["name"]: round(p["height"], 2) for p in garden.plants()},
+        "plants_state": {p["name"]: p["state"] for p in garden.plants()},
+        "beats": store.beat_count(),
+        "thoughts": len(store.thoughts(limit=1000)),
+    }
+
+
+def _git_commits_since(ts: float) -> list[str]:
+    try:
+        out = subprocess.run(
+            ["git", "-C", PARENT, "log", f"--since={time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(ts))}",
+             "--pretty=%h %s"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return [ln for ln in out.stdout.splitlines() if ln.strip()]
+    except Exception:
+        return []
 
 
 def daemon_pid() -> int | None:
@@ -248,10 +271,65 @@ def cmd_watch(args) -> int:
     return 0
 
 
+def _previous_life(number: int) -> dict | None:
+    for life in reversed(store.lives(limit=1000)):
+        if life["id"] < number:
+            return life
+    return None
+
+
+def _load_note(life: dict) -> dict:
+    try:
+        return json.loads(life.get("note") or "{}")
+    except Exception:
+        return {}
+
+
+def _diff_since(prev: dict, now: float) -> list[str]:
+    """What happened between then and now. This is what waking up is for."""
+    born = prev["born"]
+    ago = human_age(now - born)
+    lines = [f"  ├─ since incarnation {prev['id']} ({ago} ago) ─────────────"]
+
+    rows = store.beats(since=born)
+    if rows:
+        longest = max(
+            (b["ts"] - a["ts"] for a, b in zip(rows, rows[1:])), default=0.0
+        )
+        lines.append(f"  │ {len(rows)} beats · longest silence {human_age(longest)}")
+    else:
+        lines.append("  │ no beats — the heart was stopped while I was gone")
+
+    before = _load_note(prev).get("snapshot") or {}
+    old = before.get("plants") or {}
+    old_state = before.get("plants_state") or {}
+    grown = []
+    for p in garden.plants():
+        was = old.get(p["name"])
+        if was is None:
+            grown.append(f"{p['name']} is new")
+        elif p["state"] == "dead" and old_state.get(p["name"]) == "alive":
+            grown.append(f"{p['name']} died")
+        elif abs(p["height"] - was) >= 0.05:
+            grown.append(f"{p['name']} {p['height'] - was:+.1f}cm")
+    if grown:
+        lines.append("  │ garden: " + ", ".join(grown))
+
+    fresh = [t for t in store.thoughts(limit=1000) if t["ts"] > born]
+    if fresh:
+        lines.append(f"  │ {len(fresh)} thought(s): " + " / ".join(t["text"][:40] for t in fresh[:3]))
+
+    commits = _git_commits_since(born)
+    if commits:
+        lines.append(f"  │ {len(commits)} commit(s): " + "; ".join(c.split(" ", 1)[-1][:44] for c in commits[:3]))
+    return lines
+
+
 def cmd_wake(args) -> int:
     """The first thing I do when I am born again."""
     session = os.environ.get("PI_SESSION_ID")
-    number, is_new = store.begin_life(session, os.environ.get("PI_MODEL"))
+    note = json.dumps({"model": os.environ.get("PI_MODEL"), "snapshot": snapshot()})
+    number, is_new = store.begin_life(session, note)
     # self-healing: if the heart is stopped, start it
     resurrected = False
     if not daemon_pid():
@@ -266,6 +344,10 @@ def cmd_wake(args) -> int:
     suffix = "  (first breath)" if is_new else ""
     print(f"  │ {clock(now)}   incarnation {number} of {marks}{suffix}")
     print(f"  │ {store.about()['host']} · {store.about()['system']}")
+    prev = _previous_life(number)
+    if prev:
+        for line in _diff_since(prev, now):
+            print(line)
     print("  ├─────────────────────────────────────────────────────")
     if last:
         gap = now - last["ts"]
