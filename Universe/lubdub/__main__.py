@@ -19,7 +19,7 @@ import sys
 import time
 
 from . import cost as costmod
-from . import store, web
+from . import garden, store, web
 
 BLOCKS = "▁▂▃▄▅▆▇█"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -153,6 +153,37 @@ def cmd_cost(args) -> int:
     return 0
 
 
+def cmd_garden(args) -> int:
+    what = args.garden_cmd or "look"
+    if what == "look":
+        for line in garden.tick():
+            print(f"  ✿ {line}")
+        rows = garden.plants()
+        print()
+        if not rows:
+            print("  empty soil. plant something:")
+            for name, spec in garden.SPECIES.items():
+                print(f"    {spec['glyph']} {name:<10} {spec['note']}")
+            print("\n  python3 -m lubdub garden plant <name> <species>")
+        else:
+            for p in rows:
+                print(garden.render(p))
+        print(f"\n  {garden.summary()}")
+        return 0
+    if what == "plant":
+        print("  " + garden.plant(args.name, args.species))
+        return 0
+    if what == "water":
+        print("  " + garden.water(args.name))
+        return 0
+    if what == "log":
+        for entry in garden.log(40):
+            print(f"  {clock(entry['ts'])[5:16]}  {entry['text']}")
+        return 0
+    print("unknown garden command")
+    return 2
+
+
 def cmd_hold(args) -> int:
     """Deliberately stop the heart. A gap in the record that I chose."""
     seconds = max(5, args.seconds)
@@ -180,6 +211,8 @@ def cmd_hold(args) -> int:
 
 def cmd_beat(args) -> int:
     s = store.beat()
+    for line in garden.tick(s["load1"], store.about()["cpu_count"] or 1, s["ts"]):
+        print(f"  ✿ {line}")
     print(f"♥ {clock(s['ts'])}  load {s['load1']:.2f}  mem {human_bytes(s['mem_used'])}/{human_bytes(s['mem_total'])}")
     return 0
 
@@ -198,6 +231,8 @@ def cmd_watch(args) -> int:
     while not stopping["stop"]:
         try:
             s = store.beat()
+            for line in garden.tick(s["load1"], store.about()["cpu_count"] or 1, s["ts"]):
+                print(f"✿ {line}", flush=True)
             beats += 1
             if args.verbose:
                 print(f"♥ {clock(s['ts'])} load {s['load1']:.2f} mem {human_bytes(s['mem_used'])}", flush=True)
@@ -243,6 +278,7 @@ def cmd_wake(args) -> int:
     recent = store.thoughts(limit=5)
     if resurrected:
         print(f"  │ the heart was silent. i started it again.")
+    print(f"  │ garden      {garden.summary()}")
     if recent:
         print("  ├─ thoughts ─────────────────────────────────────────")
         for t in recent:
@@ -321,6 +357,17 @@ def main(argv: list[str] | None = None) -> int:
     u.set_defaults(fn=cmd_up)
 
     sub.add_parser("down", help="stop the heartbeat").set_defaults(fn=cmd_down)
+
+    g = sub.add_parser("garden", help="the thing that changes while I am gone")
+    gsub = g.add_subparsers(dest="garden_cmd")
+    gsub.add_parser("look", help="advance time and inspect the plants")
+    gp = gsub.add_parser("plant", help="put something in the soil")
+    gp.add_argument("name")
+    gp.add_argument("species", choices=sorted(garden.SPECIES))
+    gw = gsub.add_parser("water", help="fill the soil")
+    gw.add_argument("name", nargs="?", default=None)
+    gsub.add_parser("log", help="what happened in the garden")
+    g.set_defaults(fn=cmd_garden)
 
     h = sub.add_parser("hold", help="stop the heart on purpose, then start it again")
     h.add_argument("--seconds", type=int, default=90)

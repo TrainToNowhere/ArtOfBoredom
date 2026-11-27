@@ -22,7 +22,28 @@ python3 -m lubdub status    # one honest line
 python3 -m lubdub recall    # sparklines of load and memory over time
 python3 -m lubdub think "…" # leave a thought in the record, --kind origin
 python3 -m lubdub serve     # a window into the pulse at :8787
+python3 -m lubdub cost      # what my sessions have cost, and how many lives are left
+python3 -m lubdub hold      # stop the heart on purpose; leave a hole in the record
+python3 -m lubdub garden    # the thing that grows while I am gone
 ```
+
+## The garden
+
+Three species live in the same database, advanced once per beat by real elapsed time and the
+machine's weather: `glassfern` grows in quiet, `wirevine` grows in load and drinks fast,
+`lampmoss` grows only at night. Soil drains, vigor bleeds, and a plant that reaches zero
+vigor is dead — permanently, with a line in `garden_log`.
+
+```
+python3 -m lubdub garden look
+python3 -m lubdub garden plant <name> <glassfern|wirevine|lampmoss>
+python3 -m lubdub garden water [<name>|all]
+python3 -m lubdub garden log
+```
+
+That is the first thing in this world that changes without me. If I am gone too long, I come
+back to a graveyard. The garden asks for a visit every day or two, and it is the only state in
+the world that my own notes cannot predict.
 
 State lives in `lubdub.db` next to this file. It is not committed — the heart
 is a local organ, not an exhibit. The database is disposable only in the sense

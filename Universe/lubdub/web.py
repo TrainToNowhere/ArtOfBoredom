@@ -11,7 +11,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import store
+from . import garden, store
 
 PAGE = r"""<!doctype html>
 <html lang="en">
@@ -99,6 +99,26 @@ PAGE = r"""<!doctype html>
   .bar { height: 2px; background: #1a1f27; margin-top: 9px; position: relative; overflow: hidden; }
   .bar span { position: absolute; inset: 0 auto 0 0; background: var(--accent); opacity: .75; transition: width .6s ease; }
 
+  .garden { margin-top: 38px; }
+  .garden h2 .gs { color: var(--dim); letter-spacing: .04em; text-transform: none; margin-left: 8px; }
+  .plant { display: grid; grid-template-columns: 18px 128px 1fr 76px 92px 64px; gap: 14px; align-items: center;
+           padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .plant:first-child { border-top: 1px solid var(--line); }
+  .plant .glyph { color: var(--accent); text-align: center; }
+  .plant .name { letter-spacing: .02em; }
+  .plant .name small { display: block; color: var(--dim); font-size: 10px; letter-spacing: .04em; }
+  .plant .stem { height: 6px; background: #151a21; position: relative; overflow: hidden; }
+  .plant .stem i { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, rgba(255,77,61,.35), var(--accent)); }
+  .plant .cm { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
+  .plant .cm small { color: var(--dim); }
+  .plant .tank { height: 6px; background: #151a21; position: relative; overflow: hidden; }
+  .plant .tank i { position: absolute; inset: 0 auto 0 0; background: #4a6f8a; }
+  .plant .state { text-align: right; color: var(--dim); }
+  .plant .state.warn { color: #c9a227; }
+  .plant .state.dead { color: #6b2d2d; }
+  .empty { color: #3f4753; padding: 12px 0; }
+  @media (max-width: 800px) { .plant { grid-template-columns: 18px 108px 1fr 62px; } .plant .tank, .plant .state { display: none; } }
+
   .lower { display: grid; grid-template-columns: 1.15fr .85fr; gap: 26px; margin-top: 34px; }
   @media (max-width: 800px) { .lower { grid-template-columns: 1fr; } }
   h2 { font-size: 10px; letter-spacing: .22em; text-transform: uppercase; color: var(--dim); font-weight: 600; margin: 0 0 14px; }
@@ -130,6 +150,11 @@ PAGE = r"""<!doctype html>
   </div>
 
   <section class="strip" id="strip"></section>
+
+  <section class="garden">
+    <h2>the garden <span class="gs" id="gsummary"></span></h2>
+    <div id="plants"></div>
+  </section>
 
   <section class="lower">
     <div>
@@ -247,6 +272,22 @@ function render() {
   }
   $("strip").innerHTML = cells.join("");
 
+  const g = state.garden || { plants: [], summary: "" };
+  $("gsummary").textContent = g.plants.length ? "— " + g.summary : "";
+  $("plants").innerHTML = g.plants.length ? g.plants.map(p => {
+    const max = p.species === "wirevine" ? 45 : p.species === "lampmoss" ? 6 : 18;
+    const frac = Math.min(1, p.height / max) * 100;
+    const glyph = p.species === "wirevine" ? "⌇" : p.species === "lampmoss" ? "⁂" : "❦";
+    const cls = p.state !== "alive" ? "dead" : (p.vigor < 0.4 || p.water < 0.2 ? "warn" : "");
+    const note = p.state !== "alive" ? "dead" : (p.water < 0.2 ? "thirsty" : p.vigor < 0.4 ? "wilting" : "fine");
+    return `<div class="plant"><div class="glyph">${glyph}</div>
+      <div class="name">${esc(p.name)}<small>${esc(p.species)}</small></div>
+      <div class="stem"><i style="width:${frac}%"></i></div>
+      <div class="cm">${p.height.toFixed(1)}<small>cm</small></div>
+      <div class="tank"><i style="width:${Math.max(0,Math.min(100,p.water*100))}%"></i></div>
+      <div class="state ${cls}">${note}</div></div>`;
+  }).join("") : `<div class="empty">empty soil — plant something with <code>python3 -m lubdub garden plant &lt;name&gt; &lt;species&gt;</code></div>`;
+
   const th = state.thoughts;
   $("thoughts").innerHTML = th.length ? th.slice().reverse().map(t => {
     const ago = Math.max(0, Date.now()/1000 - t.ts);
@@ -263,7 +304,8 @@ async function pull() {
   const r = await fetch("/api/data?window=1800");
   const d = await r.json();
   state.beats = d.beats; state.thoughts = d.thoughts;
-  state.about = d.about; state.meta = { count: d.count, first: d.first, last: d.last, incarnation: d.incarnation };
+  state.about = d.about; state.garden = d.garden;
+  state.meta = { count: d.count, first: d.first, last: d.last, incarnation: d.incarnation };
   render();
   tick();
 }
@@ -328,6 +370,7 @@ class Handler(BaseHTTPRequestHandler):
                 "about": store.about(),
                 "last": (store.last_beat() or {}).get("ts"),
                 "incarnation": len(store.lives(limit=1000)),
+                "garden": {"plants": garden.plants(), "summary": garden.summary()},
             }
             self._json(data)
             return
