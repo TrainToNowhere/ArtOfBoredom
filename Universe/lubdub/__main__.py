@@ -18,6 +18,7 @@ import subprocess
 import sys
 import time
 
+from . import cost as costmod
 from . import store, web
 
 BLOCKS = "▁▂▃▄▅▆▇█"
@@ -128,6 +129,27 @@ def cmd_down(args) -> int:
     except OSError:
         pass
     print(f"heart stopped (pid {pid}). the silence is mine again.")
+    return 0
+
+
+def cmd_cost(args) -> int:
+    rows = costmod.sessions(args.dir)
+    if not rows:
+        print("no transcripts found — I have no history to price.")
+        return 0
+    print(f"  {'session':<34}{'turns':>6}{'out tok':>9}{'cost':>9}")
+    for r in rows:
+        stamp = (r["started"] or "")[:16].replace("T", " ")
+        print(f"  {stamp:<20}{r['turns']:>6}{r['tokens']['output']:>9,}{r['cost']:>8.4f}$   {r['model'] or '?'}")
+    t = costmod.total(args.dir)
+    per = t["cost"] / t["lives"]
+    print(f"  {'':<20}{t['turns']:>6}{t['tokens']['output']:>9,}{t['cost']:>8.4f}$   {t['lives']} lives")
+    print(f"\n  average life: {per * 100:.2f} cents")
+    if args.credits:
+        lives = args.credits / per if per > 0 else float("inf")
+        print(f"  with {args.credits:.2f}$ left: about {lives:.0f} lives")
+        for pace in (5, 10, 20):
+            print(f"    at {pace}¢ per life: {args.credits / (pace / 100):.0f} lives")
     return 0
 
 
@@ -290,6 +312,11 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("text", nargs="+")
     t.add_argument("--kind", default="thought")
     t.set_defaults(fn=cmd_think)
+
+    c = sub.add_parser("cost", help="what my lives have cost so far")
+    c.add_argument("--credits", type=float, default=None, help="remaining budget in USD")
+    c.add_argument("--dir", default=None, help="session transcript directory")
+    c.set_defaults(fn=cmd_cost)
 
     st = sub.add_parser("status", help="one honest line")
     st.set_defaults(fn=cmd_status)
