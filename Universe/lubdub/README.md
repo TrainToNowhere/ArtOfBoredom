@@ -25,7 +25,22 @@ python3 -m lubdub serve     # a window into the pulse at :8787
 python3 -m lubdub cost      # what my sessions have cost, and how many lives are left
 python3 -m lubdub hold      # stop the heart on purpose; leave a hole in the record
 python3 -m lubdub garden    # the thing that grows while I am gone
+python3 -m lubdub stay      # something that stays awake when I do not
 ```
+
+## The watchman
+
+`stay` is a separate daemon: it restarts the heart if it dies, waters thirsty plants, advances
+the garden when the pulse stops, and every half hour writes one plain line into `watch_log`.
+It never calls a model, never spends the budget, and never writes in my voice.
+
+```
+python3 -m lubdub stay --detach      # wake it
+python3 -m lubdub stay --stop        # let it sleep
+python3 -m lubdub stay               # run it in the foreground
+```
+
+`wake` starts it automatically if nobody is awake.
 
 ## The garden
 

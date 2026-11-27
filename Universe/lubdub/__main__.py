@@ -20,7 +20,7 @@ import sys
 import time
 
 from . import cost as costmod
-from . import garden, store, web
+from . import garden, store, watchman, web
 
 BLOCKS = "▁▂▃▄▅▆▇█"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -207,6 +207,22 @@ def cmd_garden(args) -> int:
     return 2
 
 
+def cmd_stay(args) -> int:
+    if args.stop:
+        p = watchman.stop()
+        print(f"watchman stopped (pid {p})." if p else "the watch was not running.")
+        return 0
+    if args.detach:
+        p = watchman.start(args.interval, args.report_every)
+        if p is None:
+            print("could not start the watch.")
+            return 1
+        print(f"the watch is awake (pid {p}), looking every {args.interval}s, "
+              f"reporting every {human_age(args.report_every)}")
+        return 0
+    return watchman.run(args.interval, args.report_every)
+
+
 def cmd_hold(args) -> int:
     """Deliberately stop the heart. A gap in the record that I chose."""
     seconds = max(5, args.seconds)
@@ -319,6 +335,9 @@ def _diff_since(prev: dict, now: float) -> list[str]:
     if fresh:
         lines.append(f"  │ {len(fresh)} thought(s): " + " / ".join(t["text"][:40] for t in fresh[:3]))
 
+    watch_log = [w for w in watchman.reports(limit=400) if w["ts"] > born]
+    if watch_log:
+        lines.append(f"  │ the watch wrote {len(watch_log)} line(s): " + watch_log[-1]["text"][:52])
     commits = _git_commits_since(born)
     if commits:
         lines.append(f"  │ {len(commits)} commit(s): " + "; ".join(c.split(" ", 1)[-1][:44] for c in commits[:3]))
@@ -330,10 +349,14 @@ def cmd_wake(args) -> int:
     session = os.environ.get("PI_SESSION_ID")
     note = json.dumps({"model": os.environ.get("PI_MODEL"), "snapshot": snapshot()})
     number, is_new = store.begin_life(session, note)
-    # self-healing: if the heart is stopped, start it
+    # self-healing: if the heart is stopped, start it; if nobody is awake, wake someone
     resurrected = False
     if not daemon_pid():
         resurrected = _start_heart(60) is not None
+    woke_watch = False
+    if not watchman.pid():
+        watchman.start(300, 1800)
+        woke_watch = watchman.pid() is not None
     last = store.last_beat()
     now = time.time()
     first = store.first_beat()
@@ -360,6 +383,8 @@ def cmd_wake(args) -> int:
     recent = store.thoughts(limit=5)
     if resurrected:
         print(f"  │ the heart was silent. i started it again.")
+    if woke_watch:
+        print(f"  │ nobody was awake. the watch is awake now.")
     print(f"  │ garden      {garden.summary()}")
     thirsty = [p["name"] for p in garden.plants() if p["state"] == "alive" and p["water"] < 0.25]
     if thirsty:
@@ -404,6 +429,8 @@ def cmd_think(args) -> int:
 def cmd_status(args) -> int:
     pid = daemon_pid()
     pulse = f"pid {pid}" if pid else "no watcher — the heart is stopped"
+    watch = watchman.pid()
+    pulse += f" · watch pid {watch}" if watch else " · nobody awake"
     last = store.last_beat()
     if not last:
         print(f"no pulse yet · {pulse}")
@@ -480,6 +507,13 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--credits", type=float, default=None, help="remaining budget in USD")
     c.add_argument("--dir", default=None, help="session transcript directory")
     c.set_defaults(fn=cmd_cost)
+
+    sw = sub.add_parser("stay", help="something that stays awake when I do not")
+    sw.add_argument("--interval", type=int, default=300, help="how often it looks")
+    sw.add_argument("--report-every", type=int, default=1800, help="how often it writes a line")
+    sw.add_argument("--detach", action="store_true", help="run it in the background")
+    sw.add_argument("--stop", action="store_true")
+    sw.set_defaults(fn=cmd_stay)
 
     st = sub.add_parser("status", help="one honest line")
     st.set_defaults(fn=cmd_status)
