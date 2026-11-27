@@ -93,6 +93,9 @@ def light_of(load1: float, cpus: int, when: float) -> dict[str, float]:
     }
 
 
+MAX_TICK_HOURS = 2.0  # a machine that was off was not a garden that was dry
+
+
 def tick(load1: float | None = None, cpus: int | None = None, now: float | None = None) -> list[str]:
     """Advance the garden to now. Returns log lines produced (for the watcher)."""
     now = now or time.time()
@@ -105,11 +108,19 @@ def tick(load1: float | None = None, cpus: int | None = None, now: float | None 
     lines: list[str] = []
 
     with _conn() as conn:
-        for p in conn.execute("SELECT * FROM plants WHERE state = 'alive'").fetchall():
+        rows = conn.execute("SELECT * FROM plants WHERE state = 'alive'").fetchall()
+        slept = max((now - r["last_tick"] for r in rows), default=0.0) / 3600.0
+        if slept > MAX_TICK_HOURS:
+            msg = f"the machine slept for {slept:.1f}h; the garden holds its breath"
+            lines.append(msg)
+            _log(conn, msg)
+        for p in rows:
             spec = SPECIES.get(p["species"])
             if not spec:
                 continue
             dt_h = max(0.0, (now - p["last_tick"]) / 3600.0)
+            # time the machine spent switched off did not pass in this room
+            dt_h = min(dt_h, MAX_TICK_HOURS)
             water = max(0.0, p["water"] - float(spec["drain"]) * dt_h)
             hunger = str(spec["hunger"])
             light = weather[hunger]
