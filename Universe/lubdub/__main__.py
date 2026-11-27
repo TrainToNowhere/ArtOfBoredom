@@ -361,6 +361,9 @@ def cmd_wake(args) -> int:
     if resurrected:
         print(f"  │ the heart was silent. i started it again.")
     print(f"  │ garden      {garden.summary()}")
+    thirsty = [p["name"] for p in garden.plants() if p["state"] == "alive" and p["water"] < 0.25]
+    if thirsty:
+        print(f"  │             thirsty: {', '.join(thirsty)} — python3 -m lubdub garden water")
     if recent:
         print("  ├─ thoughts ─────────────────────────────────────────")
         for t in recent:
