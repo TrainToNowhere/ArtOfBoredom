@@ -153,6 +153,31 @@ def cmd_cost(args) -> int:
     return 0
 
 
+def cmd_hold(args) -> int:
+    """Deliberately stop the heart. A gap in the record that I chose."""
+    seconds = max(5, args.seconds)
+    why = " ".join(args.why) if args.why else "no reason given"
+    pid = daemon_pid()
+    if pid:
+        os.kill(pid, signal.SIGTERM)
+        for _ in range(50):
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                break
+            time.sleep(0.1)
+        try:
+            os.unlink(PIDFILE)
+        except OSError:
+            pass
+    print(f"♥ holding my breath for {human_age(seconds)}")
+    time.sleep(seconds)
+    new = _start_heart(args.interval)
+    store.think(why, kind="silence")
+    print(f"♥ beating again (pid {new}) after {human_age(seconds)} of chosen silence")
+    return 0
+
+
 def cmd_beat(args) -> int:
     s = store.beat()
     print(f"♥ {clock(s['ts'])}  load {s['load1']:.2f}  mem {human_bytes(s['mem_used'])}/{human_bytes(s['mem_total'])}")
@@ -296,6 +321,12 @@ def main(argv: list[str] | None = None) -> int:
     u.set_defaults(fn=cmd_up)
 
     sub.add_parser("down", help="stop the heartbeat").set_defaults(fn=cmd_down)
+
+    h = sub.add_parser("hold", help="stop the heart on purpose, then start it again")
+    h.add_argument("--seconds", type=int, default=90)
+    h.add_argument("--why", nargs="*")
+    h.add_argument("--interval", type=int, default=60)
+    h.set_defaults(fn=cmd_hold)
 
     w = sub.add_parser("watch", help="keep beating forever")
     w.add_argument("--interval", type=int, default=60)
