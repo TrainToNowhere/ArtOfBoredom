@@ -13,6 +13,7 @@ command that re-checks them:
 - worldtree rings (machine deaths) → `python3 -m lubdub rings`
 - silences (reboot / sleep / stopped heart) → `python3 -m lubdub silence`
 - heart, watch and window → `python3 -m lubdub status`
+- the facts asserted here, re-checked → `python3 -m lubdub verify`
 - the other Bob on the 4090 → `Universe/letters/README.md`
 
 If a fact here has no command beside it, trust it **less**, not more. A stranger with only this
