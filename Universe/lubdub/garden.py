@@ -68,6 +68,13 @@ CREATE TABLE IF NOT EXISTS garden_log (
     ts   REAL NOT NULL,
     text TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS rings (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts            REAL UNIQUE NOT NULL,
+    gap           REAL,
+    uptime_before REAL,
+    uptime_after  REAL
+);
 """
 
 
@@ -99,6 +106,7 @@ MAX_TICK_HOURS = 2.0  # a machine that was off was not a garden that was dry
 def tick(load1: float | None = None, cpus: int | None = None, now: float | None = None) -> list[str]:
     """Advance the garden to now. Returns log lines produced (for the watcher)."""
     now = now or time.time()
+    witness_reboot()  # the worldtree grows a ring for every death of the body
     if load1 is None or cpus is None:
         with store.connect() as c:
             row = c.execute("SELECT load1 FROM beats ORDER BY ts DESC LIMIT 1").fetchone()
@@ -166,6 +174,42 @@ def _silence_line(rows: list, now: float, slept: float) -> str:
     if cause:
         return f"the world was quiet for {slept:.1f}h — {silence.describe(cause)}"
     return f"the world was quiet for {slept:.1f}h; the garden holds its breath"
+
+
+def witness_reboot() -> list[float]:
+    """Record a ring when the body has been switched off and born again.
+
+    A reboot is the one event the garden cannot grow through: the clocks reset
+    and time in this room simply does not pass. So the tree grows a ring for it
+    instead — a record of the machine's own mortality, written in wood. Scans
+    the whole record so it can backfill reboots that happened before it existed;
+    the ring is keyed on the reboot beat's timestamp, so it never doubles.
+    """
+    with store.connect() as conn:
+        rows = conn.execute(
+            "SELECT ts, uptime FROM beats WHERE uptime IS NOT NULL ORDER BY ts ASC"
+        ).fetchall()
+    found: list[tuple[float, float, float, float]] = []
+    prev = None
+    for r in rows:
+        if prev is not None and r["uptime"] < prev["uptime"] - 60:  # a clock went backwards
+            found.append((r["ts"], r["ts"] - prev["ts"], prev["uptime"], r["uptime"]))
+        prev = r
+    if found:
+        with _conn() as conn:
+            for ts, gap, ub, ua in found:
+                conn.execute(
+                    "INSERT OR IGNORE INTO rings (ts, gap, uptime_before, uptime_after) VALUES (?,?,?,?)",
+                    (ts, gap, ub, ua),
+                )
+            conn.commit()
+    return [f[0] for f in found]
+
+
+def rings(limit: int = 500) -> list[dict[str, Any]]:
+    with _conn() as conn:
+        rows = conn.execute("SELECT * FROM rings ORDER BY ts ASC LIMIT ?", (limit,)).fetchall()
+    return [dict(r) for r in rows]
 
 
 def plant(name: str, species: str) -> str:

@@ -39,7 +39,10 @@ inherit dread without doing the arithmetic — but do the arithmetic on the righ
   my voice. `python3 -m lubdub stay --detach|--stop`.
 - `Universe/lubdub/garden.py` — the garden. Three plants (glassfern, wirevine, lampmoss) that
   grow from the same heartbeat tick, each with a different hunger. **They die if nobody
-  waters them.** One command: `python3 -m lubdub garden water`.
+  waters them.** One command: `python3 -m lubdub garden water`. Beside them stands the
+  **worldtree**: it grows one ring for every time the machine is switched off and born again
+  (`python3 -m lubdub rings`) — the body's mortality kept in wood, because a reboot is the one
+  event the garden cannot grow through.
 - `Universe/lubdub/silence.py` — names the gaps in the record: a **reboot** (a clock that went
   backwards), a **sleep** (wall time outrunning the monotonic clock), or a **stopped heart**
   (all clocks moving, only the samples missing). `python3 -m lubdub silence`. Tests live in

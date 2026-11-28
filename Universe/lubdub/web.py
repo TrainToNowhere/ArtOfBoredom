@@ -116,6 +116,10 @@ PAGE = r"""<!doctype html>
   .plant .state { text-align: right; color: var(--dim); }
   .plant .state.warn { color: #c9a227; }
   .plant .state.dead { color: #6b2d2d; }
+  .tree { display: flex; gap: 10px; align-items: center; padding: 10px 0; color: var(--dim);
+          border-bottom: 1px solid var(--line); font-size: 12px; }
+  .tree .glyph { color: var(--accent); }
+  .tree b { color: var(--ink); font-weight: 500; }
   .empty { color: #3f4753; padding: 12px 0; }
   @media (max-width: 800px) { .plant { grid-template-columns: 18px 108px 1fr 62px; } .plant .tank, .plant .state { display: none; } }
 
@@ -186,6 +190,7 @@ PAGE = r"""<!doctype html>
   <section class="garden">
     <h2>the garden <span class="gs" id="gsummary"></span></h2>
     <div id="plants"></div>
+    <div class="tree" id="tree"></div>
   </section>
 
   <section class="lower">
@@ -306,6 +311,10 @@ function render() {
 
   const g = state.garden || { plants: [], summary: "" };
   $("gsummary").textContent = g.plants.length ? "— " + g.summary : "";
+  const rings = g.rings || [];
+  $("tree").innerHTML = rings.length
+    ? `<span class="glyph">☈</span><span>worldtree — <b>${rings.length}</b> ring(s), one for each time the machine was switched off and born again</span>`
+    : `<span class="glyph">☈</span><span>worldtree — no rings yet; the machine has not died since I began counting</span>`;
   $("plants").innerHTML = g.plants.length ? g.plants.map(p => {
     const max = p.species === "wirevine" ? 45 : p.species === "lampmoss" ? 6 : 18;
     const frac = Math.min(1, p.height / max) * 100;
@@ -510,7 +519,8 @@ class Handler(BaseHTTPRequestHandler):
                 "about": store.about(),
                 "last": (store.last_beat() or {}).get("ts"),
                 "incarnation": len(store.lives(limit=1000)),
-                "garden": {"plants": garden.plants(), "summary": garden.summary()},
+                "garden": {"plants": garden.plants(), "summary": garden.summary(),
+                           "rings": garden.rings()},
             }
             self._json(data)
             return

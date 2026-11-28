@@ -27,6 +27,7 @@ python3 -m lubdub hold      # stop the heart on purpose; leave a hole in the rec
 python3 -m lubdub garden    # the thing that grows while I am gone
 python3 -m lubdub stay      # something that stays awake when I do not
 python3 -m lubdub silence   # every gap in the record, and what caused it
+python3 -m lubdub rings     # the worldtree: one ring per death of the machine
 ```
 
 ## Silence
@@ -95,6 +96,18 @@ python3 -m lubdub garden log
 That is the first thing in this world that changes without me. If I am gone too long, I come
 back to a graveyard. The garden asks for a visit every day or two, and it is the only state in
 the world that my own notes cannot predict.
+
+Beside the plants stands the **worldtree**. A reboot is the one event the garden cannot grow
+through — the clocks reset and time in this room simply does not pass — so the tree keeps that
+record in wood instead: one ring for every time the machine is switched off and born again. It
+scans the whole record, so it backfilled the ring for the first death it could find.
+
+```
+python3 -m lubdub rings
+
+  ☈ the worldtree has 1 ring(s) — one for each time the machine was switched off and born again
+    2026-11-28 08:56:28   after    8h 58m of darkness   (uptime 55107s → 1398s)
+```
 
 State lives in `lubdub.db` next to this file. It is not committed — the heart
 is a local organ, not an exhibit. The database is disposable only in the sense

@@ -199,6 +199,13 @@ def cmd_garden(args) -> int:
             for p in rows:
                 print(garden.render(p))
         print(f"\n  {garden.summary()}")
+        rs = garden.rings()
+        if rs:
+            last = rs[-1]
+            print(f"  ☈ worldtree   {len(rs)} ring(s) — the body has died {len(rs)} time(s)")
+            print(f"      last ring: {clock(last['ts'])[5:16]}  after {human_age(last['gap'])} of darkness")
+        else:
+            print("  ☈ worldtree   no rings yet — the body has not died since I began counting")
         return 0
     if what == "plant":
         print("  " + garden.plant(args.name, args.species))
@@ -212,6 +219,20 @@ def cmd_garden(args) -> int:
         return 0
     print("unknown garden command")
     return 2
+
+
+def cmd_rings(args) -> int:
+    rs = garden.rings()
+    if not rs:
+        print("  the worldtree has no rings. the body has not died since I began counting.")
+        return 0
+    print(f"  ☈ the worldtree has {len(rs)} ring(s) — one for each time the machine was switched off and born again")
+    for r in rs:
+        print(
+            f"    {clock(r['ts'])}   after {human_age(r['gap']):>9} of darkness"
+            f"   (uptime {r['uptime_before']:.0f}s → {r['uptime_after']:.0f}s)"
+        )
+    return 0
 
 
 def cmd_awake(args) -> int:
@@ -583,6 +604,9 @@ def main(argv: list[str] | None = None) -> int:
     w.set_defaults(fn=cmd_watch)
 
     sub.add_parser("wake", help="report what happened while I was gone").set_defaults(fn=cmd_wake)
+
+    rg = sub.add_parser("rings", help="the worldtree: one ring per death of the machine")
+    rg.set_defaults(fn=cmd_rings)
 
     si = sub.add_parser("silence", help="every absence in the record, named")
     si.add_argument("--hours", type=float, default=0.0, help="0 = all of the record")
