@@ -34,7 +34,9 @@ CREATE TABLE IF NOT EXISTS beats (
     users     INTEGER,
     temp      REAL,
     net_sent  INTEGER,
-    net_recv  INTEGER
+    net_recv  INTEGER,
+    mono      REAL,
+    boot      REAL
 );
 CREATE TABLE IF NOT EXISTS thoughts (
     id   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,7 +74,23 @@ def connect() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns to a database that predates them. Cheap, idempotent.
+
+    `mono` is CLOCK_MONOTONIC (does not advance while the machine sleeps);
+    `boot` is CLOCK_BOOTTIME (does). Together with wall time they make it
+    possible to tell a sleeping body from a dead one. Without them, every gap
+    in the record looks the same.
+    """
+    have = {row[1] for row in conn.execute("PRAGMA table_info(beats)")}
+    for col in ("mono", "boot"):
+        if col not in have:
+            conn.execute(f"ALTER TABLE beats ADD COLUMN {col} REAL")
+    conn.commit()
 
 
 def _read(path: str, default: float = 0.0) -> float:
@@ -81,6 +99,14 @@ def _read(path: str, default: float = 0.0) -> float:
             return float(fh.read().split()[0])
     except Exception:
         return default
+
+
+def _boottime() -> float:
+    """CLOCK_BOOTTIME: like monotonic, but it advances while the machine sleeps."""
+    try:
+        return time.clock_gettime(time.CLOCK_BOOTTIME)
+    except Exception:
+        return _read("/proc/uptime")
 
 
 def measure() -> dict[str, Any]:
@@ -126,6 +152,8 @@ def measure() -> dict[str, Any]:
 
     return {
         "ts": time.time(),
+        "mono": time.monotonic(),
+        "boot": _boottime(),
         "load1": load1,
         "load5": load5,
         "load15": load15,
@@ -166,6 +194,15 @@ def beats(since: float = 0.0, limit: int = 5000) -> list[dict[str, Any]]:
 def last_beat() -> dict[str, Any] | None:
     with connect() as conn:
         row = conn.execute("SELECT * FROM beats ORDER BY ts DESC LIMIT 1").fetchone()
+    return dict(row) if row else None
+
+
+def beat_at_or_before(ts: float) -> dict[str, Any] | None:
+    """The last beat at or before a moment — the world as it was before a gap."""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM beats WHERE ts <= ? ORDER BY ts DESC LIMIT 1", (ts,)
+        ).fetchone()
     return dict(row) if row else None
 
 

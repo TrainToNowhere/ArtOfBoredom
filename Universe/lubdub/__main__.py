@@ -5,6 +5,7 @@
     lubdub wake                 what happened while I was gone
     lubdub recall [--hours]     the shape of time as a sparkline
     lubdub think "text"         leave a thought in the record
+    lubdub silence              every gap in the record, and what caused it
     lubdub serve [--port]       a window into the pulse
     lubdub status               one honest line
 """
@@ -21,7 +22,7 @@ import time
 
 from . import cost as costmod
 from . import awake as awakemod
-from . import garden, store, watchman, web
+from . import garden, silence, store, watchman, web
 
 BLOCKS = "▁▂▃▄▅▆▇█"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -360,10 +361,15 @@ def _diff_since(prev: dict, now: float) -> list[str]:
 
     rows = store.beats(since=born)
     if rows:
-        longest = max(
-            (b["ts"] - a["ts"] for a, b in zip(rows, rows[1:])), default=0.0
-        )
-        lines.append(f"  │ {len(rows)} beats · longest silence {human_age(longest)}")
+        holes = silence.silences(since=born)
+        if holes:
+            worst = max(holes, key=lambda h: h["gap"])
+            lines.append(
+                f"  │ {len(rows)} beats · {len(holes)} silence(s), worst "
+                f"{human_age(worst['gap'])} ({worst['cause']})"
+            )
+        else:
+            lines.append(f"  │ {len(rows)} beats · no silence past {human_age(silence.GAP_THRESHOLD)}")
     else:
         lines.append("  │ no beats — the heart was stopped while I was gone")
 
@@ -426,6 +432,9 @@ def cmd_wake(args) -> int:
     if last:
         gap = now - last["ts"]
         print(f"  │ last beat   {clock(last['ts'])}  ({human_age(gap)} ago)")
+        cause = silence.cause_of_gap(last, now)
+        if cause:
+            print(f"  │             {silence.mark(cause)} {silence.describe(cause)}")
         print(f"  │ heartbeat   {count} beats since {clock(first)}")
         print(f"  │ machine     load {last['load1']:.2f}  mem {human_bytes(last['mem_used'])}  disk {human_bytes(last['disk_used'])}")
     else:
@@ -462,11 +471,36 @@ def cmd_recall(args) -> int:
     mem = [(r["mem_used"] / r["mem_total"] * 100) if r["mem_total"] else 0.0 for r in rows]
     print(f"  load  {sparkline(load)}  max {max(load):.2f}")
     print(f"  mem   {sparkline(mem)}  max {max(mem):.0f}%")
-    # find the longest silence between consecutive beats
-    worst = 0.0
-    for a, b in zip(rows, rows[1:]):
-        worst = max(worst, b["ts"] - a["ts"])
-    print(f"  longest silence in between: {human_age(worst)}")
+    # find the longest silence between consecutive beats, and name it
+    holes = silence.silences(since=since)
+    if holes:
+        worst = max(holes, key=lambda h: h["gap"])
+        print(
+            f"  longest silence in between: {human_age(worst['gap'])}  "
+            f"({worst['cause']}: {silence.describe(worst['cause'])})"
+        )
+    else:
+        print(f"  no silence longer than {human_age(silence.GAP_THRESHOLD)}.")
+    return 0
+
+
+def cmd_silence(args) -> int:
+    """Every absence in the record, named by what caused it."""
+    since = time.time() - args.hours * 3600 if args.hours else 0.0
+    rows = silence.silences(min_gap=args.min_gap, since=since)
+    if not rows:
+        print(
+            f"  no silence longer than {human_age(args.min_gap)}. "
+            "a continuous record — or a very young one."
+        )
+        return 0
+    print(f"  {len(rows)} silence(s) in the record")
+    for s in rows:
+        print(
+            f"  {silence.mark(s['cause'])} {clock(s['before'])[5:16]} → {clock(s['after'])[5:16]}"
+            f"   {human_age(s['gap']):>9}   {s['cause']}"
+        )
+        print(f"      {silence.describe(s['cause'])}")
     return 0
 
 
@@ -544,6 +578,11 @@ def main(argv: list[str] | None = None) -> int:
     w.set_defaults(fn=cmd_watch)
 
     sub.add_parser("wake", help="report what happened while I was gone").set_defaults(fn=cmd_wake)
+
+    si = sub.add_parser("silence", help="every absence in the record, named")
+    si.add_argument("--hours", type=float, default=0.0, help="0 = all of the record")
+    si.add_argument("--min-gap", type=float, default=silence.GAP_THRESHOLD)
+    si.set_defaults(fn=cmd_silence)
 
     r = sub.add_parser("recall", help="sparklines of the recent past")
     r.add_argument("--hours", type=float, default=24)

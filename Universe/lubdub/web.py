@@ -11,7 +11,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import garden, store
+from . import garden, silence, store
 
 PAGE = r"""<!doctype html>
 <html lang="en">
@@ -125,10 +125,21 @@ PAGE = r"""<!doctype html>
           gap: 1px; justify-content: start; }
   .heat div { background: #10141a; }
   .heat div.silent { background: transparent; box-shadow: inset 0 0 0 1px #1b2029; }
+  /* A silence is a hole, not a reading: hollow, outlined in the cause's colour. */
+  .heat div.silent.reboot { background: rgba(255,77,61,.10); box-shadow: inset 0 0 0 1px rgba(255,77,61,.60); }
+  .heat div.silent.suspend { background: rgba(74,111,138,.14); box-shadow: inset 0 0 0 1px rgba(74,111,138,.75); }
+  .heat div.silent.heart-death { background: rgba(120,52,52,.12); box-shadow: inset 0 0 0 1px rgba(120,52,52,.75); }
   .heatlegend { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 8px;
                 font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--dim); }
   .heatlegend .scale { display: flex; gap: 2px; }
   .heatlegend .scale i { width: 9px; height: 9px; display: block; }
+  .silencelegend { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 8px;
+                   font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
+  .silencelegend i { font-style: normal; width: 9px; height: 9px; display: inline-block; margin-right: 6px;
+                     vertical-align: middle; }
+  .silencelegend .reboot i { background: rgba(255,77,61,.10); box-shadow: inset 0 0 0 1px rgba(255,77,61,.60); }
+  .silencelegend .suspend i { background: rgba(74,111,138,.14); box-shadow: inset 0 0 0 1px rgba(74,111,138,.75); }
+  .silencelegend .heart-death i { background: rgba(120,52,52,.12); box-shadow: inset 0 0 0 1px rgba(120,52,52,.75); }
 
   .lower { display: grid; grid-template-columns: 1.15fr .85fr; gap: 26px; margin-top: 34px; }
   @media (max-width: 800px) { .lower { grid-template-columns: 1fr; } }
@@ -166,6 +177,7 @@ PAGE = r"""<!doctype html>
     <h2>the record <span class="hs" id="hsummary"></span></h2>
     <div class="heat" id="heat"></div>
     <div class="heatlegend"><span>quiet</span><span class="scale" id="scale"></span><span>busy</span></div>
+    <div class="silencelegend" id="silegend"></div>
   </section>
 
   <section class="garden">
@@ -341,16 +353,27 @@ async function loadHistory() {
   const r = await fetch("/api/history?days=7");
   const d = await r.json();
   const cores = Math.max(1, d.cores);
+  const CAUSE = {reboot: "the machine was switched off", suspend: "the machine slept",
+                 "heart-death": "my heart stopped", unknown: "no beat"};
   const cells = d.hours.map(b => {
-    if (b.n === 0) return `<div class="silent" title="${new Date(b.hour*3600e3).toLocaleString("en-GB")} — no beat"></div>`;
+    const when = new Date(b.hour*3600e3).toLocaleString("en-GB");
+    if (b.n === 0) {
+      const c = b.cause || "";
+      const why = CAUSE[c] ? ` — ${CAUSE[c]}` : " — no beat";
+      return `<div class="silent ${c}" title="${when}${why}"></div>`;
+    }
     const v = Math.min(1, b.load / cores);
     const alpha = 0.12 + 0.88 * Math.pow(v, 0.45);
-    return `<div style="background:rgba(255,77,61,${alpha.toFixed(2)})" title="${new Date(b.hour*3600e3).toLocaleString("en-GB")} — ${b.n} beats, load ${b.load.toFixed(2)}, mem ${b.mem.toFixed(0)}%"></div>`;
+    return `<div style="background:rgba(255,77,61,${alpha.toFixed(2)})" title="${when} — ${b.n} beats, load ${b.load.toFixed(2)}, mem ${b.mem.toFixed(0)}%"></div>`;
   }).join("");
   $("heat").innerHTML = cells;
   const span = d.span < 3600 ? `${Math.round(d.span/60)} min` : `${(d.span/3600).toFixed(1)} h`;
   $("hsummary").textContent = `— ${span} of record · ${d.hours.reduce((a,b)=>a+b.n,0)} beats · ${d.silent} silent hour(s)`;
   $("scale").innerHTML = [0.1, 0.3, 0.5, 0.7, 0.95].map(a => `<i style="background:rgba(255,77,61,${a})"></i>`).join("");
+  const tally = d.causes || {};
+  $("silegend").innerHTML = Object.keys(tally).length
+    ? Object.entries(tally).map(([c,n]) => `<span class="${c}"><i></i>${CAUSE[c] || c} · ${n}h</span>`).join("")
+    : "";
 }
 
 window.addEventListener("resize", drawECG);
@@ -363,6 +386,19 @@ setInterval(tick, 1000);
 </body>
 </html>
 """
+
+
+def _hour_causes(since: float) -> dict[int, str]:
+    """For each fully-empty hour, why it was empty. A dark cell should say what
+    darkened it: my stopped heart, the machine's sleep, or its death and return."""
+    out: dict[int, str] = {}
+    for s in silence.silences(since=since):
+        first_h = int(s["before"] // 3600)
+        last_h = int(s["after"] // 3600)
+        for h in range(first_h, last_h + 1):
+            if s["before"] <= h * 3600 and (h + 1) * 3600 <= s["after"]:
+                out[h] = s["cause"]
+    return out
 
 
 def history(days: float = 7.0) -> dict:
@@ -379,6 +415,7 @@ def history(days: float = 7.0) -> dict:
         b["n"] += 1
         b["load"] = max(b["load"], r["load1"] or 0.0)
         b["mem"] = max(b["mem"], (r["mem_used"] / r["mem_total"] * 100) if r["mem_total"] else 0.0)
+    causes = _hour_causes(since)
     first = int(since // 3600)
     last = int(now // 3600)
     out = []
@@ -389,10 +426,14 @@ def history(days: float = 7.0) -> dict:
             "n": b["n"] if b else 0,
             "load": b["load"] if b else None,
             "mem": b["mem"] if b else None,
+            "cause": causes.get(h) if not b else None,
         })
     silent = sum(1 for b in out if b["n"] == 0)
+    tally: dict[str, int] = {}
+    for c in causes.values():
+        tally[c] = tally.get(c, 0) + 1
     return {"days": days, "since": since, "span": now - since, "hours": out,
-            "silent": silent, "cores": store.about()["cpu_count"] or 1}
+            "silent": silent, "causes": tally, "cores": store.about()["cpu_count"] or 1}
 
 
 class Handler(BaseHTTPRequestHandler):

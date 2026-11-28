@@ -15,7 +15,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from . import store
+from . import silence, store
 
 SPECIES: dict[str, dict[str, float | str]] = {
     "glassfern": {
@@ -111,9 +111,8 @@ def tick(load1: float | None = None, cpus: int | None = None, now: float | None 
         rows = conn.execute("SELECT * FROM plants WHERE state = 'alive'").fetchall()
         slept = max((now - r["last_tick"] for r in rows), default=0.0) / 3600.0
         if slept > MAX_TICK_HOURS:
-            msg = f"the machine slept for {slept:.1f}h; the garden holds its breath"
-            lines.append(msg)
-            _log(conn, msg)
+            lines.append(_silence_line(rows, now, slept))
+            _log(conn, lines[-1])
         for p in rows:
             spec = SPECIES.get(p["species"])
             if not spec:
@@ -153,6 +152,20 @@ def tick(load1: float | None = None, cpus: int | None = None, now: float | None 
             )
         conn.commit()
     return lines
+
+
+def _silence_line(rows: list, now: float, slept: float) -> str:
+    """Name a long quiet honestly. The world can go quiet because my heart
+    stopped, because the machine slept, or because it was switched off and
+    born again — and those are not the same thing."""
+    if not rows:
+        return f"the world was quiet for {slept:.1f}h"
+    before = min(r["last_tick"] for r in rows)
+    prev = store.beat_at_or_before(before)
+    cause = silence.cause_of_gap(prev, now) if prev else None
+    if cause:
+        return f"the world was quiet for {slept:.1f}h — {silence.describe(cause)}"
+    return f"the world was quiet for {slept:.1f}h; the garden holds its breath"
 
 
 def plant(name: str, species: str) -> str:
