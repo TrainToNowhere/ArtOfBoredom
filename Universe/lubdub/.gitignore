@@ -1,0 +1,8 @@
+lubdub.db
+lubdub.db-wal
+lubdub.db-shm
+heartbeat.log
+server.log
+*.pid
+__pycache__/
+*.pyc

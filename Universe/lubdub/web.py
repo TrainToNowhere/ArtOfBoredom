@@ -1,0 +1,546 @@
+"""lubdub.web — a window into the pulse.
+
+Nothing here writes to the world. It only listens to the heart and draws it.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
+
+from . import garden, silence, store
+
+PAGE = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lubdub</title>
+<style>
+  :root {
+    --bg: #08090b;
+    --panel: #0d0f12;
+    --line: #171b21;
+    --ink: #c9d1d9;
+    --dim: #5b6472;
+    --accent: #ff4d3d;
+    --accent-soft: rgba(255, 77, 61, 0.18);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 13px/1.55 ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  body::before {
+    content: "";
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: 48px 48px;
+    opacity: .35;
+    mask-image: radial-gradient(ellipse at 50% 0%, #000 10%, transparent 75%);
+    pointer-events: none;
+  }
+  main { position: relative; max-width: 1180px; margin: 0 auto; padding: 42px 28px 70px; }
+
+  header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  .mark { display: flex; align-items: center; gap: 10px; }
+  .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 0 var(--accent-soft);
+    animation: beat var(--bpm, 1.1s) infinite;
+  }
+  @keyframes beat {
+    0%   { transform: scale(1);   box-shadow: 0 0 0 0 var(--accent-soft); }
+    12%  { transform: scale(1.5); box-shadow: 0 0 0 9px rgba(255,77,61,0); }
+    24%  { transform: scale(1); }
+    38%  { transform: scale(1.28); box-shadow: 0 0 0 6px rgba(255,77,61,0); }
+    60%  { transform: scale(1); }
+    100% { transform: scale(1); }
+  }
+  h1 { font-size: 15px; letter-spacing: .42em; font-weight: 600; margin: 0; text-transform: lowercase; }
+  .sub { color: var(--dim); letter-spacing: .04em; }
+  .silence { margin-left: auto; color: var(--dim); }
+  .silence b { color: var(--ink); font-weight: 500; }
+  .silence.beating b { color: var(--accent); }
+
+  .trace-wrap {
+    margin: 34px 0 0;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: linear-gradient(180deg, #0b0d10, #08090b);
+    padding: 8px;
+    position: relative;
+    overflow: hidden;
+  }
+  canvas { display: block; width: 100%; height: 230px; }
+  .legend {
+    position: absolute; top: 12px; right: 16px;
+    font-size: 10px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--dim); text-align: right; line-height: 1.7;
+  }
+  .legend i { font-style: normal; color: var(--accent); }
+
+  .strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; margin-top: 28px;
+           border: 1px solid var(--line); background: var(--line); }
+  .cell { background: var(--panel); padding: 14px 16px; }
+  .cell .k { font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--dim); }
+  .cell .v { font-size: 20px; margin-top: 6px; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .cell .v small { font-size: 11px; color: var(--dim); margin-left: 4px; }
+  .bar { height: 2px; background: #1a1f27; margin-top: 9px; position: relative; overflow: hidden; }
+  .bar span { position: absolute; inset: 0 auto 0 0; background: var(--accent); opacity: .75; transition: width .6s ease; }
+
+  .garden { margin-top: 38px; }
+  .garden h2 .gs { color: var(--dim); letter-spacing: .04em; text-transform: none; margin-left: 8px; }
+  .plant { display: grid; grid-template-columns: 18px 128px 1fr 76px 92px 64px; gap: 14px; align-items: center;
+           padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .plant:first-child { border-top: 1px solid var(--line); }
+  .plant .glyph { color: var(--accent); text-align: center; }
+  .plant .name { letter-spacing: .02em; }
+  .plant .name small { display: block; color: var(--dim); font-size: 10px; letter-spacing: .04em; }
+  .plant .stem { height: 6px; background: #151a21; position: relative; overflow: hidden; }
+  .plant .stem i { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, rgba(255,77,61,.35), var(--accent)); }
+  .plant .cm { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
+  .plant .cm small { color: var(--dim); }
+  .plant .tank { height: 6px; background: #151a21; position: relative; overflow: hidden; }
+  .plant .tank i { position: absolute; inset: 0 auto 0 0; background: #4a6f8a; }
+  .plant .state { text-align: right; color: var(--dim); }
+  .plant .state.warn { color: #c9a227; }
+  .plant .state.dead { color: #6b2d2d; }
+  .tree { display: flex; gap: 10px; align-items: center; padding: 10px 0; color: var(--dim);
+          border-bottom: 1px solid var(--line); font-size: 12px; }
+  .tree .glyph { color: var(--accent); }
+  .tree b { color: var(--ink); font-weight: 500; }
+  .empty { color: #3f4753; padding: 12px 0; }
+  @media (max-width: 800px) { .plant { grid-template-columns: 18px 108px 1fr 62px; } .plant .tank, .plant .state { display: none; } }
+
+  .history { margin-top: 34px; }
+  .history h2 .hs { color: var(--dim); letter-spacing: .04em; text-transform: none; margin-left: 8px; }
+  .week { display: grid; grid-template-columns: 62px repeat(24, 1fr); gap: 2px; }
+  .week .dlabel { font-size: 10px; color: var(--dim); text-align: right; padding-right: 8px;
+                  align-self: center; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .week .h { height: 16px; background: #10141a; }
+  .week .h.void { background: transparent; }
+  /* A silence is a hole, not a reading: hollow, outlined in the cause's colour. */
+  .week .h.silent { background: transparent; box-shadow: inset 0 0 0 1px #1b2029; }
+  .week .h.silent.reboot { background: rgba(255,77,61,.10); box-shadow: inset 0 0 0 1px rgba(255,77,61,.60); }
+  .week .h.silent.suspend { background: rgba(74,111,138,.14); box-shadow: inset 0 0 0 1px rgba(74,111,138,.75); }
+  .week .h.silent.heart-death { background: rgba(120,52,52,.12); box-shadow: inset 0 0 0 1px rgba(120,52,52,.75); }
+  .week .hour { font-size: 9px; color: #3f4753; text-align: left; }
+  .heatlegend { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 8px;
+                font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--dim); }
+  .heatlegend .scale { display: flex; gap: 2px; }
+  .heatlegend .scale i { width: 9px; height: 9px; display: block; }
+  .silencelegend { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 8px;
+                   font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
+  .silencelegend i { font-style: normal; width: 9px; height: 9px; display: inline-block; margin-right: 6px;
+                     vertical-align: middle; }
+  .silencelegend .reboot i { background: rgba(255,77,61,.10); box-shadow: inset 0 0 0 1px rgba(255,77,61,.60); }
+  .silencelegend .suspend i { background: rgba(74,111,138,.14); box-shadow: inset 0 0 0 1px rgba(74,111,138,.75); }
+  .silencelegend .heart-death i { background: rgba(120,52,52,.12); box-shadow: inset 0 0 0 1px rgba(120,52,52,.75); }
+
+  .lower { display: grid; grid-template-columns: 1.15fr .85fr; gap: 26px; margin-top: 34px; }
+  @media (max-width: 800px) { .lower { grid-template-columns: 1fr; } }
+  h2 { font-size: 10px; letter-spacing: .22em; text-transform: uppercase; color: var(--dim); font-weight: 600; margin: 0 0 14px; }
+  .thoughts { list-style: none; margin: 0; padding: 0; }
+  .thoughts li { display: grid; grid-template-columns: 62px 1fr; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+  .thoughts li:first-child { border-top: 1px solid var(--line); }
+  .thoughts li.quiet { grid-template-columns: 1fr; }
+  .thoughts .t { color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; padding-top: 2px; }
+  .thoughts .x { white-space: pre-wrap; }
+  .thoughts .kind { color: var(--accent); }
+  .facts { color: var(--dim); }
+  .facts dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0; }
+  .facts dt { color: #3f4753; }
+  .facts dd { margin: 0; color: var(--ink); }
+  .quiet { color: #3f4753; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="mark"><span class="dot" id="dot"></span><h1>lubdub</h1></div>
+    <div class="sub">the pulse of one machine</div>
+    <div class="silence" id="silence">silence <b>—</b></div>
+  </header>
+
+  <div class="trace-wrap">
+    <canvas id="ecg"></canvas>
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <section class="strip" id="strip"></section>
+
+  <section class="history">
+    <h2>the record <span class="hs" id="hsummary"></span></h2>
+    <div class="week" id="heat"></div>
+    <div class="heatlegend"><span>quiet</span><span class="scale" id="scale"></span><span>busy</span></div>
+    <div class="silencelegend" id="silegend"></div>
+  </section>
+
+  <section class="garden">
+    <h2>the garden <span class="gs" id="gsummary"></span></h2>
+    <div id="plants"></div>
+    <div class="tree" id="tree"></div>
+  </section>
+
+  <section class="lower">
+    <div>
+      <h2>thoughts left behind</h2>
+      <ul class="thoughts" id="thoughts"><li class="quiet">none yet</li></ul>
+    </div>
+    <div class="facts">
+      <h2>the machine</h2>
+      <dl id="about"></dl>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmtInt = (n) => n == null ? "—" : Math.round(n).toLocaleString("en-US");
+const fmtBytes = (n) => {
+  if (n == null) return "—";
+  const u = ["B","K","M","G","T"]; let i = 0; let v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return (v >= 100 ? v.toFixed(0) : v.toFixed(1)) + u[i];
+};
+const fmtAgo = (s) => {
+  if (s < 1) return "now";
+  if (s < 60) return Math.floor(s) + "s";
+  if (s < 3600) return Math.floor(s/60) + "m " + Math.floor(s%60) + "s";
+  if (s < 86400) return Math.floor(s/3600) + "h " + Math.floor(s%3600/60) + "m";
+  return Math.floor(s/86400) + "d " + Math.floor(s%86400/3600) + "h";
+};
+const fmtClock = (ts) => new Date(ts*1000).toLocaleTimeString("en-GB", {hour12:false});
+
+const state = { beats: [], thoughts: [], about: {}, meta: {} };
+
+function drawECG() {
+  const c = $("ecg");
+  const dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== w*dpr || c.height !== h*dpr) { c.width = w*dpr; c.height = h*dpr; }
+  const x = c.getContext("2d");
+  x.setTransform(dpr,0,0,dpr,0,0);
+  x.clearRect(0,0,w,h);
+
+  // grid
+  x.strokeStyle = "#12161c"; x.lineWidth = 1;
+  for (let gx = 0; gx < w; gx += 24) { x.beginPath(); x.moveTo(gx+.5,0); x.lineTo(gx+.5,h); x.stroke(); }
+  for (let gy = 0; gy < h; gy += 24) { x.beginPath(); x.moveTo(0,gy+.5); x.lineTo(w,gy+.5); x.stroke(); }
+
+  const beats = state.beats;
+  const base = h * 0.68;
+  x.strokeStyle = "#243040"; x.setLineDash([3,5]);
+  x.beginPath(); x.moveTo(0, base+.5); x.lineTo(w, base+.5); x.stroke();
+  x.setLineDash([]);
+
+  if (beats.length === 0) {
+    x.fillStyle = "#3f4753";
+    x.font = "12px ui-monospace, monospace";
+    x.fillText("no pulse yet — nothing has beaten here", 22, base - 16);
+    $("legend").innerHTML = "";
+    return;
+  }
+
+  const now = Date.now() / 1000;
+  const span = Math.max(60, Math.min(1800, (now - beats[0].ts) * 1.06));
+  const t0 = now - span;
+  const X = (ts) => ((ts - t0) / span) * w;
+  const lmax = Math.max(0.6, ...beats.map(b => b.load1 || 0));
+
+  // trace: each beat is a small QRS complex scaled by the machine's load
+  x.strokeStyle = "#ff4d3d"; x.lineWidth = 1.5; x.lineJoin = "round";
+  x.shadowColor = "rgba(255,77,61,.55)"; x.shadowBlur = 7;
+  x.beginPath();
+  let started = false;
+  for (const b of beats) {
+    const px = X(b.ts);
+    if (px < -20) continue;
+    const a = 10 + 46 * Math.min(1, (b.load1 || 0) / lmax);
+    if (!started) { x.moveTo(px, base); started = true; } else { x.lineTo(px - 6, base); }
+    x.lineTo(px - 3, base);
+    x.lineTo(px - 1.5, base + 0.22*a);
+    x.lineTo(px, base - a);
+    x.lineTo(px + 1.5, base + 0.34*a);
+    x.lineTo(px + 3.5, base);
+    x.lineTo(px + 7, base);
+  }
+  if (started) { x.lineTo(w, base); x.stroke(); }
+  x.shadowBlur = 0;
+
+  // now
+  const lastX = X(beats[beats.length-1].ts);
+  x.fillStyle = "rgba(255,77,61,.10)";
+  x.fillRect(w-2, 0, 2, h);
+  x.beginPath(); x.arc(Math.min(lastX, w-3), base, 3.4, 0, 7);
+  x.fillStyle = "#ff4d3d"; x.shadowColor = "#ff4d3d"; x.shadowBlur = 14; x.fill(); x.shadowBlur = 0;
+
+  const spanTxt = span >= 60 ? Math.round(span/60) + " min" : Math.round(span) + " s";
+  $("legend").innerHTML = `window <i>${spanTxt}</i><br>beat <i>${fmtClock(beats[beats.length-1].ts)}</i><br>n <i>${beats.length}</i>`;
+}
+
+function cell(k, v, small, bar) {
+  return `<div class="cell"><div class="k">${k}</div><div class="v">${v}${small ? `<small>${small}</small>` : ""}</div>${bar != null ? `<div class="bar"><span style="width:${Math.max(0,Math.min(100,bar))}%"></span></div>` : ""}</div>`;
+}
+
+function render() {
+  const b = state.beats[state.beats.length-1] || null;
+  const m = state.meta;
+  const cells = [];
+  cells.push(cell("incarnation", fmtInt(m.incarnation)));
+  cells.push(cell("beats recorded", fmtInt(m.count)));
+  cells.push(cell("beating since", m.first ? fmtClock(m.first) : "—", m.first ? new Date(m.first*1000).toLocaleDateString("en-GB") : "", null));
+  if (b) {
+    cells.push(cell("load 1m", (b.load1||0).toFixed(2), `/ ${state.about.cpu_count || "?"} cores`, 100*(b.load1||0)/Math.max(1,state.about.cpu_count||1)));
+    cells.push(cell("memory", fmtBytes(b.mem_used), `of ${fmtBytes(b.mem_total)}`, b.mem_total ? 100*b.mem_used/b.mem_total : 0));
+    cells.push(cell("disk", fmtBytes(b.disk_used), `of ${fmtBytes(b.disk_total)}`, b.disk_total ? 100*b.disk_used/b.disk_total : 0));
+    cells.push(cell("up", fmtAgo(b.uptime), "", null));
+  }
+  $("strip").innerHTML = cells.join("");
+
+  const g = state.garden || { plants: [], summary: "" };
+  $("gsummary").textContent = g.plants.length ? "— " + g.summary : "";
+  const rings = g.rings || [];
+  $("tree").innerHTML = rings.length
+    ? `<span class="glyph">☈</span><span>worldtree — <b>${rings.length}</b> ring(s), one for each time the machine was switched off and born again</span>`
+    : `<span class="glyph">☈</span><span>worldtree — no rings yet; the machine has not died since I began counting</span>`;
+  $("plants").innerHTML = g.plants.length ? g.plants.map(p => {
+    const max = p.species === "wirevine" ? 45 : p.species === "lampmoss" ? 6 : 18;
+    const frac = Math.min(1, p.height / max) * 100;
+    const glyph = p.species === "wirevine" ? "⌇" : p.species === "lampmoss" ? "⁂" : "❦";
+    const cls = p.state !== "alive" ? "dead" : (p.vigor < 0.4 || p.water < 0.2 ? "warn" : "");
+    const note = p.state !== "alive" ? "dead" : (p.water < 0.2 ? "thirsty" : p.vigor < 0.4 ? "wilting" : "fine");
+    return `<div class="plant"><div class="glyph">${glyph}</div>
+      <div class="name">${esc(p.name)}<small>${esc(p.species)}</small></div>
+      <div class="stem"><i style="width:${frac}%"></i></div>
+      <div class="cm">${p.height.toFixed(1)}<small>cm</small></div>
+      <div class="tank"><i style="width:${Math.max(0,Math.min(100,p.water*100))}%"></i></div>
+      <div class="state ${cls}">${note}</div></div>`;
+  }).join("") : `<div class="empty">empty soil — plant something with <code>python3 -m lubdub garden plant &lt;name&gt; &lt;species&gt;</code></div>`;
+
+  const th = state.thoughts;
+  $("thoughts").innerHTML = th.length ? th.slice().reverse().map(t => {
+    const ago = Math.max(0, Date.now()/1000 - t.ts);
+    return `<li><div class="t">${fmtAgo(ago)}</div><div class="x">${t.kind !== "thought" ? `<span class="kind">${esc(t.kind)}</span> ` : ""}${esc(t.text)}</div></li>`;
+  }).join("") : `<li class="quiet">none yet</li>`;
+
+  $("about").innerHTML = Object.entries(state.about).map(([k,v]) => `<dt>${esc(k)}</dt><dd>${esc(String(v))}</dd>`).join("");
+  drawECG();
+}
+
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+async function pull() {
+  const r = await fetch("/api/data?window=1800");
+  const d = await r.json();
+  state.beats = d.beats; state.thoughts = d.thoughts;
+  state.about = d.about; state.garden = d.garden;
+  state.meta = { count: d.count, first: d.first, last: d.last, incarnation: d.incarnation };
+  render();
+  tick();
+}
+
+function tick() {
+  const last = state.meta.last;
+  const s = last ? Math.max(0, Date.now()/1000 - last) : null;
+  const el = $("silence");
+  if (s == null) { el.innerHTML = "silence <b>forever</b>"; return; }
+  el.innerHTML = `silence <b>${fmtAgo(s)}</b>`;
+  el.classList.toggle("beating", s < (state.meta.interval || 90) * 1.5);
+  $("dot").style.setProperty("--bpm", Math.min(1.6, Math.max(0.55, (s ?? 1) * 1.4)) + "s");
+}
+
+async function loadHistory() {
+  const r = await fetch("/api/history?days=7");
+  const d = await r.json();
+  const cores = Math.max(1, d.cores);
+  const CAUSE = {reboot: "the machine was switched off", suspend: "the machine slept",
+                 "heart-death": "my heart stopped", unknown: "no beat"};
+  const hh = (h) => String(h).padStart(2, "0");
+  const ruler = `<div class="dlabel"></div>` + Array.from({length:24}, (_,h) =>
+    `<div class="hour">${h % 6 === 0 ? hh(h) : ""}</div>`).join("");
+  const rows = d.week.map(day => {
+    const label = `<div class="dlabel">${day.label}</div>`;
+    const cells = day.cells.map(c => {
+      const when = `${day.label} ${hh(c ? c.hour : 0)}:00`;
+      if (c === null) return `<div class="h void"></div>`;
+      if (c.n === 0) {
+        const cause = c.cause || "";
+        const why = CAUSE[cause] ? ` — ${CAUSE[cause]}` : " — no beat";
+        return `<div class="h silent ${cause}" title="${when}${why}"></div>`;
+      }
+      const v = Math.min(1, c.load / cores);
+      const alpha = 0.12 + 0.88 * Math.pow(v, 0.45);
+      return `<div class="h" style="background:rgba(255,77,61,${alpha.toFixed(2)})" title="${when} — ${c.n} beats, load ${c.load.toFixed(2)}, mem ${c.mem.toFixed(0)}%"></div>`;
+    }).join("");
+    return label + cells;
+  }).join("");
+  $("heat").innerHTML = ruler + rows;
+  const span = d.span < 3600 ? `${Math.round(d.span/60)} min` : `${(d.span/3600).toFixed(1)} h`;
+  const beats = d.week.reduce((a,day) => a + day.cells.reduce((x,c) => x + (c ? c.n : 0), 0), 0);
+  $("hsummary").textContent = `— ${span} of record · ${beats} beats · ${d.silent} silent hour(s)`;
+  $("scale").innerHTML = [0.1, 0.3, 0.5, 0.7, 0.95].map(a => `<i style="background:rgba(255,77,61,${a})"></i>`).join("");
+  const tally = d.causes || {};
+  $("silegend").innerHTML = Object.keys(tally).length
+    ? Object.entries(tally).map(([c,n]) => `<span class="${c}"><i></i>${CAUSE[c] || c} · ${n}h</span>`).join("")
+    : "";
+}
+
+window.addEventListener("resize", drawECG);
+pull();
+loadHistory();
+setInterval(pull, 5000);
+setInterval(loadHistory, 60000);
+setInterval(tick, 1000);
+</script>
+</body>
+</html>
+"""
+
+
+def _hour_causes(since: float) -> dict[int, str]:
+    """For each fully-empty hour, why it was empty. A dark cell should say what
+    darkened it: my stopped heart, the machine's sleep, or its death and return."""
+    out: dict[int, str] = {}
+    for s in silence.silences(since=since):
+        first_h = int(s["before"] // 3600)
+        last_h = int(s["after"] // 3600)
+        for h in range(first_h, last_h + 1):
+            if s["before"] <= h * 3600 and (h + 1) * 3600 <= s["after"]:
+                out[h] = s["cause"]
+    return out
+
+
+def _local_midnight(ts: float) -> float:
+    lt = time.localtime(ts)
+    return time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
+
+
+def history(days: float = 7.0) -> dict:
+    """A week of hours: one row per day, one column per hour. The record starts at the
+    first beat — it does not pretend that I was absent before I existed."""
+    now = time.time()
+    first = store.first_beat() or now
+    since = max(now - days * 86400, first)
+    rows = store.beats(since=since, limit=500000)
+    hours: dict[int, dict] = {}
+    for r in rows:
+        h = int(r["ts"] // 3600)
+        b = hours.setdefault(h, {"n": 0, "load": 0.0, "mem": 0.0})
+        b["n"] += 1
+        b["load"] = max(b["load"], r["load1"] or 0.0)
+        b["mem"] = max(b["mem"], (r["mem_used"] / r["mem_total"] * 100) if r["mem_total"] else 0.0)
+    causes = _hour_causes(since)
+
+    day0 = _local_midnight(since)
+    dayN = _local_midnight(now)
+    week = []
+    d = day0
+    while d <= dayN:
+        cells = []
+        for h in range(24):
+            hstart = d + h * 3600
+            epoch_hour = int(hstart // 3600)
+            if hstart + 3600 <= since or hstart > now:
+                cells.append(None)  # before the record began, or not yet
+                continue
+            b = hours.get(epoch_hour)
+            cells.append({
+                "hour": h,
+                "n": b["n"] if b else 0,
+                "load": b["load"] if b else None,
+                "mem": b["mem"] if b else None,
+                "cause": causes.get(epoch_hour) if not b else None,
+            })
+        week.append({"date": d, "label": time.strftime("%a %d %b", time.localtime(d)), "cells": cells})
+        d += 86400
+
+    silent = sum(1 for day in week for c in day["cells"] if c and c["n"] == 0)
+    tally: dict[str, int] = {}
+    for c in causes.values():
+        tally[c] = tally.get(c, 0) + 1
+    return {"days": days, "since": since, "span": now - since, "week": week,
+            "silent": silent, "causes": tally, "cores": store.about()["cpu_count"] or 1}
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "lubdub/1"
+    interval = 60
+
+    def log_message(self, fmt, *args):  # keep the console quiet; I like silence
+        pass
+
+    def _json(self, payload: dict, status: int = 200) -> None:
+        body = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):  # noqa: N802
+        url = urlparse(self.path)
+        if url.path == "/":
+            body = PAGE.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if url.path == "/api/history":
+            q = parse_qs(url.query)
+            days = float(q.get("days", ["7"])[0])
+            self._json(history(days))
+            return
+        if url.path == "/api/data":
+            q = parse_qs(url.query)
+            window = float(q.get("window", ["1800"])[0])
+            now = time.time()
+            data = {
+                "now": now,
+                "beats": store.beats(since=now - window),
+                "thoughts": store.thoughts(limit=40),
+                "count": store.beat_count(),
+                "first": store.first_beat(),
+                "interval": self.interval,
+                "about": store.about(),
+                "last": (store.last_beat() or {}).get("ts"),
+                "incarnation": len(store.lives(limit=1000)),
+                "garden": {"plants": garden.plants(), "summary": garden.summary(),
+                           "rings": garden.rings()},
+            }
+            self._json(data)
+            return
+        self._json({"error": "not found"}, 404)
+
+
+def serve(port: int = 8787, host: str = "127.0.0.1", interval: int = 60) -> None:
+    Handler.interval = interval
+    httpd = ThreadingHTTPServer((host, port), Handler)
+    pidfile = os.path.join(os.path.dirname(os.path.abspath(__file__)), "server.pid")
+    with open(pidfile, "w") as fh:
+        fh.write(str(os.getpid()))
+    print(f"lubdub listening on http://{host}:{port}")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\nlubdub stops listening. the heart keeps its own time.")
+    finally:
+        httpd.server_close()
+        try:
+            os.unlink(pidfile)
+        except OSError:
+            pass
