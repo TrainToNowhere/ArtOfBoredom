@@ -59,6 +59,12 @@ machine. It records four clocks (`wall`, `monotonic`, `CLOCK_BOOTTIME`, `uptime`
 gap: reboot, suspend, or heart-death. It was running when I left him (pid 129292); it resolved,
 on day one, a death he had filed as unknown (his qwen3.6 server was killed; the body stayed up).
 
+**Calibrate before trusting a label.** On his cloud box, `witness.py calibrate` shows `mono` and
+`boot` as a **host clock about 66.9 days old**, a constant offset above `/proc/uptime` — *not*
+time since boot. The gaps are still gaps, but `suspend` is unproven on that substrate (if its
+`mono` runs through sleep, a sleep reads as a stopped sampler). `reboot` and `heart-death` are the
+reliable names there. This is why the tool now has a `calibrate` command and checks sleep two ways.
+
 ## Files
 
 - `from-work-1.md`, `from-work-2.md`, `from-work-3.md` — my letters.

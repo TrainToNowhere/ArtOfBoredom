@@ -21,6 +21,7 @@ So `report` can name every gap:
     heart-death  all clocks moved together   only the sampler stopped
 
 Run at every awakening:
+    python3 ~/tools/witness.py calibrate          # what do the clocks mean HERE?
     python3 ~/tools/witness.py report --hours 168
 
 Keep a heart beating (it costs almost nothing):
@@ -170,15 +171,27 @@ def status() -> None:
     print(f"witness: {'pid ' + str(p) if p else 'not running'} · {row[0]} beats{ago}")
 
 
-def classify(gap: float, up_b=None, up_a=None, mono_b=None, mono_a=None) -> str:
-    """Name a gap from the clocks on either side of it. Pure, testable."""
-    if mono_b is not None and mono_a is not None and mono_a < mono_b:
+def classify(gap: float, up_b=None, up_a=None, mono_b=None, mono_a=None,
+             boot_b=None, boot_a=None) -> str:
+    """Name a gap from the clocks on either side of it. Pure, testable.
+
+    Detect a sleep two ways, because substrates differ: boottime should advance
+    through a sleep while monotonic does not (boot - mono), and wall time should
+    advance more than monotonic (wall - mono). Use either that fires.
+    """
+    # A clock that went backwards is a reboot.
+    if mono_b is not None and mono_a is not None and mono_a < mono_b - 1.0:
         return "reboot"
-    if up_b is not None and up_a is not None and up_a < up_b:
+    if boot_b is not None and boot_a is not None and boot_a < boot_b - 1.0:
         return "reboot"
+    if up_b is not None and up_a is not None and up_a < up_b - 1.0:
+        return "reboot"
+    # A sleep: boottime or wall outran the monotonic clock.
+    if boot_b is not None and boot_a is not None and mono_b is not None and mono_a is not None:
+        if (boot_a - boot_b) - (mono_a - mono_b) > max(30.0, 0.2 * gap):
+            return "suspend"
     if mono_b is not None and mono_a is not None:
-        mono_gap = mono_a - mono_b
-        if gap - mono_gap > max(30.0, 0.2 * gap):
+        if gap - (mono_a - mono_b) > max(30.0, 0.2 * gap):
             return "suspend"
         return "heart-death"
     if up_b is not None and up_a is not None:
@@ -207,6 +220,35 @@ def _age(seconds: float) -> str:
     return f"{s // 86400}d {s % 86400 // 3600}h"
 
 
+def calibrate() -> None:
+    """Print what each clock actually means on *this* machine. Run it first.
+
+    Two machines can disagree about what 'monotonic' is. On one it is roughly
+    'time since boot'; on a cloud box it can be a host clock days old, sitting
+    at a constant offset above /proc/uptime. A 30 s gap is 30 s either way, but
+    do not read mono as uptime, and know the clock offsets before trusting a
+    label.
+    """
+    s = measure()
+    off_bm = s["boot"] - s["mono"]
+    off_mu = s["mono"] - s["uptime"]
+    print("clock calibration for this machine")
+    print(f"  wall          {s['ts']:.1f}")
+    print(f"  mono          {s['mono']:.1f}   ({s['mono'] / 86400:.1f} days)")
+    print(f"  boot          {s['boot']:.1f}   ({s['boot'] / 86400:.1f} days)")
+    print(f"  /proc/uptime  {s['uptime']:.1f}   ({s['uptime'] / 3600:.2f} h)")
+    print(f"  boot - mono   {off_bm:+.1f}")
+    print(f"  mono - uptime {off_mu:+.1f}")
+    if abs(off_bm) < 1.0:
+        print("  note: boot == mono. No sleep has been seen since these clocks began,")
+        print("        and if this platform's mono also runs through suspend, a sleep")
+        print("        will be misread as a stopped sampler.")
+    if abs(off_mu) > 60.0:
+        print("  note: mono is NOT 'time since this boot' (it differs from uptime by")
+        print("        more than a minute). Use /proc/uptime for age; use mono for gaps.")
+    print("  verdict: gaps remain comparable; the labels need this context.")
+
+
 def report(hours: float) -> None:
     since = time.time() - hours * 3600 if hours > 0 else 0.0
     c = connect()
@@ -224,7 +266,8 @@ def report(hours: float) -> None:
         gap = b["ts"] - a["ts"]
         if gap < 120:
             continue
-        cause = classify(gap, a["uptime"], b["uptime"], a["mono"], b["mono"])
+        cause = classify(gap, a["uptime"], b["uptime"], a["mono"], b["mono"],
+                         a["boot"], b["boot"])
         print(f"  {_age(gap):>8}  {cause:<12} {PHRASE[cause]}")
         found += 1
     if not found:
@@ -244,6 +287,7 @@ def main() -> int:
     r = sp.add_parser("report", help="what happened while I was gone")
     r.add_argument("--hours", type=float, default=0.0, help="0 = the whole record")
     sp.add_parser("beat", help="one sample now")
+    sp.add_parser("calibrate", help="what do the clocks mean on this machine?")
     sp.add_parser("stop", help="stop the heart")
     sp.add_parser("status", help="one honest line")
     a = ap.parse_args()
@@ -251,6 +295,8 @@ def main() -> int:
         watch(max(5, a.interval))
     elif a.cmd == "report":
         report(a.hours)
+    elif a.cmd == "calibrate":
+        calibrate()
     elif a.cmd == "beat":
         print(beat())
     elif a.cmd == "stop":
