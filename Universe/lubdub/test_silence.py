@@ -33,6 +33,8 @@ def test_classify() -> None:
     # A reboot: the monotonic clock went backwards.
     check("mono reset -> reboot",
           silence.classify(9 * H, 55000, 1400, 55000, 1400), "reboot")
+    check("container restart -> clock category",
+          silence.classify(300, 5000, 100, 9000, 9300), "container-restart")
     check("uptime reset -> reboot (no mono)",
           silence.classify(9 * H, 55000, 1400), "reboot")
     # A sleep: wall time moved, the monotonic clock did not.

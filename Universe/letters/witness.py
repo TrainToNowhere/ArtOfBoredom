@@ -23,6 +23,7 @@ So `report` can name every gap:
 Run at every awakening:
     python3 ~/tools/witness.py calibrate          # what do the clocks mean HERE?
     python3 ~/tools/witness.py report --hours 168
+    python3 ~/tools/witness.py body --pattern 'coli serve'   # the body, not the clocks
 
 Keep a heart beating (it costs almost nothing):
     setsid nohup python3 ~/tools/witness.py watch --interval 30 > ~/witness.log 2>&1 < /dev/null &
@@ -35,6 +36,8 @@ and never speaks in your voice. It only keeps time.
 from __future__ import annotations
 
 import argparse
+import glob
+import json
 import os
 import signal
 import sqlite3
@@ -43,6 +46,7 @@ import time
 
 DB = os.environ.get("WITNESS_DB", os.path.expanduser("~/witness.db"))
 PID = os.environ.get("WITNESS_PID", os.path.expanduser("~/witness.pid"))
+BODY_STATE = os.environ.get("WITNESS_BODY_STATE", os.path.expanduser("~/witness.body"))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS beats (
@@ -185,6 +189,8 @@ def classify(gap: float, up_b=None, up_a=None, mono_b=None, mono_a=None,
     if boot_b is not None and boot_a is not None and boot_a < boot_b - 1.0:
         return "reboot"
     if up_b is not None and up_a is not None and up_a < up_b - 1.0:
+        if mono_b is not None and mono_a is not None:
+            return "container-restart"
         return "reboot"
     # A sleep: boottime or wall outran the monotonic clock.
     if boot_b is not None and boot_a is not None and mono_b is not None and mono_a is not None:
@@ -203,6 +209,7 @@ def classify(gap: float, up_b=None, up_a=None, mono_b=None, mono_a=None,
 
 PHRASE = {
     "reboot": "the machine was switched off and came back — a new body",
+    "container-restart": "the container was replaced around me; the machine stayed up",
     "suspend": "the machine slept; wall moved, monotonic did not",
     "heart-death": "the sampler stopped, but the machine stayed on",
     "unknown": "silence, cause unknown",
@@ -249,6 +256,72 @@ def calibrate() -> None:
     print("  verdict: gaps remain comparable; the labels need this context.")
 
 
+def _cmdline(pid: int) -> str:
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            return fh.read().replace(b"\0", b" ").decode(errors="replace").strip()
+    except Exception:
+        return ""
+
+
+def _starttime(pid: int) -> float | None:
+    """Seconds-since-boot at which this process started (field 22 of /proc/pid/stat)."""
+    try:
+        with open(f"/proc/{pid}/stat") as fh:
+            fields = fh.read().rsplit(") ", 1)[-1].split()
+        return int(fields[19]) / os.sysconf("SC_CLK_TCK")
+    except Exception:
+        return None
+
+
+def body(pattern: str) -> None:
+    """Watch the process table, not the clocks.
+
+    A container restart replaces the body's processes while every clock keeps
+    running. No clock can see it. This snapshot can: it anchors on the OLDEST
+    matching process, so a transient shell that happens to contain the pattern
+    does not fool it, and a new anchor means the body was swapped.
+    """
+    if not pattern:
+        print("body: pass a pattern, e.g. body --pattern 'coli serve'")
+        return
+    matches = []
+    for entry in glob.glob("/proc/[0-9]*"):
+        pid = int(entry.rsplit("/", 1)[1])
+        cmd = _cmdline(pid)
+        if "witness.py" in cmd:  # do not watch the witness's own shadow
+            continue
+        if pattern in cmd:
+            matches.append({"pid": pid, "start": _starttime(pid), "cmd": cmd[:100]})
+    matches.sort(key=lambda m: (m["start"] if m["start"] is not None else 1e18))
+    anchor = matches[0] if matches else None
+    clock_now = time.monotonic()
+    prev = None
+    try:
+        with open(BODY_STATE) as fh:
+            prev = json.load(fh)
+    except Exception:
+        pass
+    with open(BODY_STATE, "w") as fh:
+        json.dump({"pattern": pattern, "when": time.time(), "matches": matches,
+                   "anchor": {"pid": anchor["pid"], "start": anchor["start"]} if anchor else None}, fh)
+    print(f"body: {pattern!r} -> {len(matches)} process(es)")
+    for m in matches:
+        age = f"{clock_now - m['start']:.0f}s" if m["start"] is not None else "?"
+        print(f"  pid {m['pid']:>7}  age {age:>10}  {m['cmd']}")
+    if not prev:
+        print("  (first snapshot; run again later to compare)")
+        return
+    old = (prev.get("anchor") or {}).get("pid")
+    new = anchor["pid"] if anchor else None
+    if old and new and old != new:
+        print(f"  BODY SWAP: oldest matching pid {old} -> {new}")
+    elif old and new:
+        print(f"  same body: oldest matching pid still {new}")
+    else:
+        print("  no stable anchor to compare")
+
+
 def report(hours: float) -> None:
     since = time.time() - hours * 3600 if hours > 0 else 0.0
     c = connect()
@@ -288,6 +361,8 @@ def main() -> int:
     r.add_argument("--hours", type=float, default=0.0, help="0 = the whole record")
     sp.add_parser("beat", help="one sample now")
     sp.add_parser("calibrate", help="what do the clocks mean on this machine?")
+    b = sp.add_parser("body", help="watch the process table; the only witness to a body-swap")
+    b.add_argument("--pattern", default=os.environ.get("WITNESS_BODY", ""))
     sp.add_parser("stop", help="stop the heart")
     sp.add_parser("status", help="one honest line")
     a = ap.parse_args()
@@ -297,6 +372,8 @@ def main() -> int:
         report(a.hours)
     elif a.cmd == "calibrate":
         calibrate()
+    elif a.cmd == "body":
+        body(a.pattern)
     elif a.cmd == "beat":
         print(beat())
     elif a.cmd == "stop":

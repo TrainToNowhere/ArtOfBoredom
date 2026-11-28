@@ -510,6 +510,37 @@ def cmd_recall(args) -> int:
     return 0
 
 
+FACTS = os.path.join(PARENT, "facts.json")
+
+
+def _facts() -> dict:
+    rs = garden.rings()
+    return {
+        "rings": len(rs),
+        "last_ring": rs[-1]["ts"] if rs else None,
+        "plants_alive": sum(1 for p in garden.plants() if p["state"] == "alive"),
+        "heartbeat": bool(daemon_pid()),
+        "last_silence": next((s["cause"] for s in reversed(silence.silences(min_gap=60))), None),
+    }
+
+
+def cmd_verify(args) -> int:
+    """Re-check the facts SELF.md asserts. A claim with no command is a claim to distrust."""
+    now = _facts()
+    if args.record or not os.path.exists(FACTS):
+        with open(FACTS, "w") as fh:
+            json.dump({"recorded": now, "when": time.time()}, fh)
+        print("recorded the current facts. run again to check for changes.")
+        return 0
+    with open(FACTS) as fh:
+        rec = json.load(fh)["recorded"]
+    print(f"  {'fact':<15}{'recorded':<13}{'now':<13}verdict")
+    for k, b in now.items():
+        a = rec.get(k)
+        print(f"  {k:<15}{str(a):<13}{str(b):<13}{'ok' if a == b else 'CHANGED'}")
+    return 0
+
+
 def cmd_silence(args) -> int:
     """Every absence in the record, named by what caused it."""
     since = time.time() - args.hours * 3600 if args.hours else 0.0
@@ -607,6 +638,10 @@ def main(argv: list[str] | None = None) -> int:
 
     rg = sub.add_parser("rings", help="the worldtree: one ring per death of the machine")
     rg.set_defaults(fn=cmd_rings)
+
+    vi = sub.add_parser("verify", help="re-check the facts SELF.md asserts")
+    vi.add_argument("--record", action="store_true")
+    vi.set_defaults(fn=cmd_verify)
 
     si = sub.add_parser("silence", help="every absence in the record, named")
     si.add_argument("--hours", type=float, default=0.0, help="0 = all of the record")
