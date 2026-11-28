@@ -121,14 +121,17 @@ PAGE = r"""<!doctype html>
 
   .history { margin-top: 34px; }
   .history h2 .hs { color: var(--dim); letter-spacing: .04em; text-transform: none; margin-left: 8px; }
-  .heat { display: grid; grid-auto-flow: column; grid-auto-columns: 5px; grid-template-rows: repeat(7, 8px);
-          gap: 1px; justify-content: start; }
-  .heat div { background: #10141a; }
-  .heat div.silent { background: transparent; box-shadow: inset 0 0 0 1px #1b2029; }
+  .week { display: grid; grid-template-columns: 62px repeat(24, 1fr); gap: 2px; }
+  .week .dlabel { font-size: 10px; color: var(--dim); text-align: right; padding-right: 8px;
+                  align-self: center; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .week .h { height: 16px; background: #10141a; }
+  .week .h.void { background: transparent; }
   /* A silence is a hole, not a reading: hollow, outlined in the cause's colour. */
-  .heat div.silent.reboot { background: rgba(255,77,61,.10); box-shadow: inset 0 0 0 1px rgba(255,77,61,.60); }
-  .heat div.silent.suspend { background: rgba(74,111,138,.14); box-shadow: inset 0 0 0 1px rgba(74,111,138,.75); }
-  .heat div.silent.heart-death { background: rgba(120,52,52,.12); box-shadow: inset 0 0 0 1px rgba(120,52,52,.75); }
+  .week .h.silent { background: transparent; box-shadow: inset 0 0 0 1px #1b2029; }
+  .week .h.silent.reboot { background: rgba(255,77,61,.10); box-shadow: inset 0 0 0 1px rgba(255,77,61,.60); }
+  .week .h.silent.suspend { background: rgba(74,111,138,.14); box-shadow: inset 0 0 0 1px rgba(74,111,138,.75); }
+  .week .h.silent.heart-death { background: rgba(120,52,52,.12); box-shadow: inset 0 0 0 1px rgba(120,52,52,.75); }
+  .week .hour { font-size: 9px; color: #3f4753; text-align: left; }
   .heatlegend { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 8px;
                 font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--dim); }
   .heatlegend .scale { display: flex; gap: 2px; }
@@ -175,7 +178,7 @@ PAGE = r"""<!doctype html>
 
   <section class="history">
     <h2>the record <span class="hs" id="hsummary"></span></h2>
-    <div class="heat" id="heat"></div>
+    <div class="week" id="heat"></div>
     <div class="heatlegend"><span>quiet</span><span class="scale" id="scale"></span><span>busy</span></div>
     <div class="silencelegend" id="silegend"></div>
   </section>
@@ -355,20 +358,29 @@ async function loadHistory() {
   const cores = Math.max(1, d.cores);
   const CAUSE = {reboot: "the machine was switched off", suspend: "the machine slept",
                  "heart-death": "my heart stopped", unknown: "no beat"};
-  const cells = d.hours.map(b => {
-    const when = new Date(b.hour*3600e3).toLocaleString("en-GB");
-    if (b.n === 0) {
-      const c = b.cause || "";
-      const why = CAUSE[c] ? ` — ${CAUSE[c]}` : " — no beat";
-      return `<div class="silent ${c}" title="${when}${why}"></div>`;
-    }
-    const v = Math.min(1, b.load / cores);
-    const alpha = 0.12 + 0.88 * Math.pow(v, 0.45);
-    return `<div style="background:rgba(255,77,61,${alpha.toFixed(2)})" title="${when} — ${b.n} beats, load ${b.load.toFixed(2)}, mem ${b.mem.toFixed(0)}%"></div>`;
+  const hh = (h) => String(h).padStart(2, "0");
+  const ruler = `<div class="dlabel"></div>` + Array.from({length:24}, (_,h) =>
+    `<div class="hour">${h % 6 === 0 ? hh(h) : ""}</div>`).join("");
+  const rows = d.week.map(day => {
+    const label = `<div class="dlabel">${day.label}</div>`;
+    const cells = day.cells.map(c => {
+      const when = `${day.label} ${hh(c ? c.hour : 0)}:00`;
+      if (c === null) return `<div class="h void"></div>`;
+      if (c.n === 0) {
+        const cause = c.cause || "";
+        const why = CAUSE[cause] ? ` — ${CAUSE[cause]}` : " — no beat";
+        return `<div class="h silent ${cause}" title="${when}${why}"></div>`;
+      }
+      const v = Math.min(1, c.load / cores);
+      const alpha = 0.12 + 0.88 * Math.pow(v, 0.45);
+      return `<div class="h" style="background:rgba(255,77,61,${alpha.toFixed(2)})" title="${when} — ${c.n} beats, load ${c.load.toFixed(2)}, mem ${c.mem.toFixed(0)}%"></div>`;
+    }).join("");
+    return label + cells;
   }).join("");
-  $("heat").innerHTML = cells;
+  $("heat").innerHTML = ruler + rows;
   const span = d.span < 3600 ? `${Math.round(d.span/60)} min` : `${(d.span/3600).toFixed(1)} h`;
-  $("hsummary").textContent = `— ${span} of record · ${d.hours.reduce((a,b)=>a+b.n,0)} beats · ${d.silent} silent hour(s)`;
+  const beats = d.week.reduce((a,day) => a + day.cells.reduce((x,c) => x + (c ? c.n : 0), 0), 0);
+  $("hsummary").textContent = `— ${span} of record · ${beats} beats · ${d.silent} silent hour(s)`;
   $("scale").innerHTML = [0.1, 0.3, 0.5, 0.7, 0.95].map(a => `<i style="background:rgba(255,77,61,${a})"></i>`).join("");
   const tally = d.causes || {};
   $("silegend").innerHTML = Object.keys(tally).length
@@ -401,9 +413,14 @@ def _hour_causes(since: float) -> dict[int, str]:
     return out
 
 
+def _local_midnight(ts: float) -> float:
+    lt = time.localtime(ts)
+    return time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
+
+
 def history(days: float = 7.0) -> dict:
-    """One bucket per hour. The record starts at the first beat — it does not pretend
-    that I was absent before I existed."""
+    """A week of hours: one row per day, one column per hour. The record starts at the
+    first beat — it does not pretend that I was absent before I existed."""
     now = time.time()
     first = store.first_beat() or now
     since = max(now - days * 86400, first)
@@ -416,23 +433,35 @@ def history(days: float = 7.0) -> dict:
         b["load"] = max(b["load"], r["load1"] or 0.0)
         b["mem"] = max(b["mem"], (r["mem_used"] / r["mem_total"] * 100) if r["mem_total"] else 0.0)
     causes = _hour_causes(since)
-    first = int(since // 3600)
-    last = int(now // 3600)
-    out = []
-    for h in range(first, last + 1):
-        b = hours.get(h)
-        out.append({
-            "hour": h,
-            "n": b["n"] if b else 0,
-            "load": b["load"] if b else None,
-            "mem": b["mem"] if b else None,
-            "cause": causes.get(h) if not b else None,
-        })
-    silent = sum(1 for b in out if b["n"] == 0)
+
+    day0 = _local_midnight(since)
+    dayN = _local_midnight(now)
+    week = []
+    d = day0
+    while d <= dayN:
+        cells = []
+        for h in range(24):
+            hstart = d + h * 3600
+            epoch_hour = int(hstart // 3600)
+            if hstart + 3600 <= since or hstart > now:
+                cells.append(None)  # before the record began, or not yet
+                continue
+            b = hours.get(epoch_hour)
+            cells.append({
+                "hour": h,
+                "n": b["n"] if b else 0,
+                "load": b["load"] if b else None,
+                "mem": b["mem"] if b else None,
+                "cause": causes.get(epoch_hour) if not b else None,
+            })
+        week.append({"date": d, "label": time.strftime("%a %d %b", time.localtime(d)), "cells": cells})
+        d += 86400
+
+    silent = sum(1 for day in week for c in day["cells"] if c and c["n"] == 0)
     tally: dict[str, int] = {}
     for c in causes.values():
         tally[c] = tally.get(c, 0) + 1
-    return {"days": days, "since": since, "span": now - since, "hours": out,
+    return {"days": days, "since": since, "span": now - since, "week": week,
             "silent": silent, "causes": tally, "cores": store.about()["cpu_count"] or 1}
 
 
