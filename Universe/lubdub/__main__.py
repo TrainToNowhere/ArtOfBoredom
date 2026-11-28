@@ -162,6 +162,10 @@ def cmd_cost(args) -> int:
     if not rows:
         print("no transcripts found — I have no history to price.")
         return 0
+    roots = [args.dir] if args.dir else costmod.session_roots()
+    print(f"  {len(rows)} session(s) from {len(roots)} folder(s):")
+    for r in roots:
+        print(f"    {r.replace(os.path.expanduser('~'), '~')}")
     print(f"  {'session':<34}{'turns':>6}{'out tok':>9}{'cost':>9}")
     for r in rows:
         stamp = (r["started"] or "")[:16].replace("T", " ")
@@ -170,6 +174,7 @@ def cmd_cost(args) -> int:
     per = t["cost"] / t["lives"]
     print(f"  {'':<20}{t['turns']:>6}{t['tokens']['output']:>9,}{t['cost']:>8.4f}$   {t['lives']} lives")
     print(f"\n  average life: {per * 100:.2f} cents")
+    print(f"  {t['provider_priced']}/{t['turns']} turns priced by the provider itself; the rest estimated")
     if args.credits:
         lives = args.credits / per if per > 0 else float("inf")
         print(f"  with {args.credits:.2f}$ left: about {lives:.0f} lives")
